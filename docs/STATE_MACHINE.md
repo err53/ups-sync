@@ -174,7 +174,7 @@ table, pass/fail per variant, and counterexample traces.
 | `T_DEAD` = 5 | 10 min dark (persisted) before cutting a group whose servers are all off |
 | `T_WOL` = 5 | 10 min with one server down and one up before iDRAC power-on of the down one |
 | `T_HOLD` = 3 | 6 min stable input before restore |
-| `E_RESTORE` = 26 | restore only with a reserve of ≥ 26 min *with every server running* (about 46 % charge today) |
+| `E_RESTORE` = 26 | restore only with a reserve of ≥ 26 min *at the heaviest load seen* (about half charge today) |
 | `E_LB` = 16 | UPS low-battery threshold 16 min (NMC "Low battery duration") |
 | `E_SHED` = 3 | NMC load shed group 2 when runtime < 3 min. Was 6; lowered so the card's own return threshold is enough (see RESULTS.md) |
 | `E_RETURN` = 17 | NMC min return runtime 60 min, the card's maximum. The card measures at the present load, so with the servers off this is only about 17 to 23 min with them running |
@@ -189,8 +189,8 @@ the model already allows.
 
 | Difference | Why it is safe |
 | --- | --- |
-| **Battery reserve is not the UPS's runtime figure.** The UPS reports runtime at its *present* load. With the servers off that is two to three times what it will be once they boot, so comparing it with `E_RESTORE` would restore far too early. The model's `e` is minutes with every server running. The code uses state of charge instead: `reserve = charge % x ratio`, where `ratio` (full-load minutes per percent) is learned from the UPS's own runtime figure whenever input is present, charge is at least 90 %, and every server is up. It is stored, and it follows battery ageing and load changes. Until it has been learned once, restore and wake are refused. | This is what makes the code match the model's `e`. Found in review; the first version compared raw runtime. |
-| Real seconds and 15 s polling instead of 2-minute ticks. A timer counts how long a condition has been *watched* without interruption. If two readings are more than 50 s apart (failed UPS reads, a stalled HA), every timer restarts. | A refinement: "held for N ticks" becomes "held for N x 120 s", and unobserved time never counts. |
+| **Battery reserve is not the UPS's raw runtime figure.** The UPS reports runtime at its *present* load. With the servers off that is two to three times what it will be once they boot, so comparing it with `E_RESTORE` would restore far too early. The model's `e` is minutes with every server running. The code scales the UPS's figure to the heaviest load it has seen with the group on: `reserve = runtime x (load now / peak load) ^ 1.4`. The exponent is deliberately above the 1.2 to 1.36 that APC's runtime tables give for this UPS, so the result never overstates. The peak only rises, needs two consecutive readings to rise, is stored, and is not learned while the group is off. Until one exists, restore and wake are refused. | This is what makes the code match the model's `e`. Found in review: the first version compared raw runtime, the second learned a ratio that followed recent (possibly light) load. |
+| Real seconds and 15 s polling instead of 2-minute ticks. A timer counts how long a condition has been *watched* without interruption. If two readings are more than 120 s apart (failed UPS reads, a stalled HA), every timer restarts. 120 s is also when the problem sensor reports the UPS as unreadable. | A refinement: "held for N ticks" becomes "held for N x 120 s", and unobserved time never counts. |
 | The stored "all servers silent since" time survives restarts, as in the model. It may be stale, so a power-cycle also needs this process to have watched the silence itself for `T_GRACE`. A stored time in the future is discarded. | Only removes cuts. |
 | The state only becomes CUT or returns to IDLE when the group is *observed* off or on. Cut and restore emit a command and wait. | A failed SNMP write is retried on the next poll instead of being assumed. |
 | The cut guard is evaluated again on fresh readings immediately before the SNMP write. | Only removes cuts. |
@@ -200,12 +200,13 @@ the model already allows.
 | Maintenance also blocks restore, not only recover and wake. Turning maintenance off restarts the recover and wake timers. | Only removes actions. |
 | Disarmed (the default after install): readings and timers run, decisions are computed on a copy and published as `would_act`, nothing is sent. | No actions. |
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
-| The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
+| The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), when the group has been off with stable input for six hours without a restore, and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
 | The "grid down but APC online" notification is not part of the integration. | Notification only. A plain automation on the wall connector's voltage does it. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives
 this code through random outages. Unlike the model, its UPS reports runtime
-at the present load along a curve the controller does not know, its load
-readings are noisy, the UPS is sometimes unreadable, and the card may switch
+at the present load along a curve the controller does not know, each
+server's draw wanders and booting draws more than anything seen before,
+load readings are noisy, the UPS is sometimes unreadable, and the card may switch
 the group back on by itself whenever its own threshold is met. It checks
 `NoHardCut`, `NoSpurious`, the alarm, and recovery on every run.

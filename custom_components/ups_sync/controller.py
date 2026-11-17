@@ -17,7 +17,6 @@ from .const import DOMAIN, STALE_SECONDS
 from .machine import (
     CUT,
     IDLE,
-    LEARN_MIN_CHARGE,
     SHUTDOWN,
     Action,
     Obs,
@@ -26,10 +25,10 @@ from .machine import (
     State,
     cut_guard,
     decide,
-    learn_ratio,
     observe,
     reserve_minutes,
-    stuck_dark,
+    stuck,
+    update_peak,
 )
 from .servers import Server, ServerError
 from .snmp import ApcClient, UpsError, UpsReading
@@ -60,7 +59,9 @@ class Controller:
         self.last_action = ""
         self.last_ok: float | None = None
         self.last_error = ""
-        self.ratio: float | None = None  # full-load minutes per percent of charge
+        self.peak: float | None = None  # heaviest UPS load seen with the group on
+        self._prev_load: float | None = None
+        self._wanted_group: bool | None = None
         self.group_cmd_failed = False
         self.stuck = False
         self._stopped = False
@@ -80,7 +81,7 @@ class Controller:
         self.state.dead_since = data.get("dead_since")
         if self.state.dead_since is not None and self.state.dead_since > time.time():
             self.state.dead_since = None  # the clock stepped backwards
-        self.ratio = data.get("ratio")
+        self.peak = data.get("peak")
         self._saved = self._snapshot()
 
     def _snapshot(self) -> dict:
@@ -88,17 +89,8 @@ class Controller:
             "armed": self.armed,
             "maintenance": self.maintenance,
             "dead_since": self.state.dead_since,
-            "ratio": self._ratio_to_save(),
+            "peak": self.peak,
         }
-
-    def _ratio_to_save(self) -> float | None:
-        """The stored ratio, replaced only once the average has moved by 3 %."""
-        saved = self._saved.get("ratio")
-        if self.ratio is None:
-            return saved
-        if saved is None or abs(self.ratio - saved) > 0.03 * saved:
-            return round(self.ratio, 3)
-        return saved
 
     async def _save_if_changed(self) -> None:
         snap = self._snapshot()
@@ -142,7 +134,7 @@ class Controller:
 
     @property
     def calibrated(self) -> bool:
-        return self.params.load_idle_max is not None and self.ratio is not None
+        return self.params.load_idle_max is not None and self.peak is not None
 
     async def async_stop(self) -> None:
         """Wait for a step in flight, then never act again (unload, reload)."""
@@ -158,7 +150,7 @@ class Controller:
             "calibrated": self.calibrated,
             "stuck_servers_off": self.stuck,
             "group_command_failed": self.group_cmd_failed,
-            "full_load_min_per_pct": self.ratio,
+            "peak_load_w": self.peak,
             "acked": sorted(self.state.acked),
             "would_act": self.would_act,
             "last_action": self.last_action,
@@ -178,20 +170,14 @@ class Controller:
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
-        if (
-            ups.input_present
-            and ups.group_on
-            and ups.charge_pct >= LEARN_MIN_CHARGE
-            and all(probes[:n])
-        ):
-            # Every server is up: this runtime figure is the full-load one.
-            self.ratio = learn_ratio(self.ratio, ups.runtime_min, ups.charge_pct)
+        self.peak = update_peak(self.peak, self._prev_load, ups.load_w, ups.group_on)
+        self._prev_load = ups.load_w
         return Obs(
             input_present=ups.input_present,
             on_battery=ups.on_battery,
             low_battery=ups.low_battery,
             runtime_min=ups.runtime_min,
-            reserve_min=reserve_minutes(ups.charge_pct, self.ratio),
+            reserve_min=reserve_minutes(ups.runtime_min, ups.load_w, self.peak),
             load_w=ups.load_w,
             group_on=ups.group_on,
             servers={
@@ -225,7 +211,9 @@ class Controller:
         mono, wall = time.monotonic(), time.time()
         st = self.state
         observe(st, obs, mono, wall)
-        self.stuck = not self.maintenance and stuck_dark(st, obs, wall, self.params)
+        self.stuck = not self.maintenance and stuck(st, obs, mono, wall, self.params)
+        if obs.group_on == self._wanted_group:
+            self.group_cmd_failed = False  # it got there, by us or by hand
         if not self.armed:
             # Dry run: never leave the observable states, never act.
             st.ctl = IDLE if obs.group_on else CUT
@@ -258,14 +246,19 @@ class Controller:
                 await self.servers[act.server].power_on()
             elif act.kind == "cut":
                 # Look again immediately before cutting.
-                fresh = await self._gather()
-                if not cut_guard(fresh, self.params):
+                try:
+                    safe = cut_guard(await self._gather(), self.params)
+                except UpsError:
+                    safe = False
+                if not safe:
                     self.last_error = "cut skipped: guard failed on re-check"
                     _LOGGER.warning(self.last_error)
                     return
+                self._wanted_group = False
                 await self.ups.set_group(False)
                 self.group_cmd_failed = False
             elif act.kind == "restore":
+                self._wanted_group = True
                 await self.ups.set_group(True)
                 self.group_cmd_failed = False
         except (ServerError, UpsError) as exc:

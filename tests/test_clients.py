@@ -32,19 +32,18 @@ async def test_read_asks_for_the_right_oids_in_order():
 
     async def get_cmd(engine, community, target, context, *objects):
         seen.extend(_oid_and_value(o)[0] for o in objects)
-        return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 94, 412, 96000, 1)]
+        return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
 
     with patch.object(snmp, "get_cmd", get_cmd), patch.object(snmp.ApcClient, "_target", _target):
         r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
     assert seen == [
         f"{APC}.4.1.1.0",  # output status
         f"{APC}.2.2.3.0",  # runtime remaining
-        f"{APC}.2.2.1.0",  # battery capacity
         f"{APC}.4.2.8.0",  # output watts
         f"{APC}.5.2.8.0",  # low-battery duration
         f"{APC}.12.1.2.1.3.2",  # state of group 2
     ]
-    assert r.runtime_min == 57 and r.charge_pct == 94 and r.group_on
+    assert r.runtime_min == 57 and r.load_w == 412 and r.group_on
 
 
 @pytest.mark.parametrize(("on", "value"), [(True, 1), (False, 2)])
@@ -67,7 +66,7 @@ async def test_snmp_errors_become_ups_errors():
         return "No SNMP response received before timeout", None, 0, []
 
     async def no_such(*a):
-        return None, None, 0, [(None, "No Such Instance")] * 6
+        return None, None, 0, [(None, "No Such Instance")] * 5
 
     for fake in (timeout, no_such):
         with patch.object(snmp, "get_cmd", fake), patch.object(snmp.ApcClient, "_target", _target):

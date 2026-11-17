@@ -9,10 +9,10 @@ from custom_components.ups_sync.machine import (
     ServerObs,
     State,
     decide,
-    learn_ratio,
     observe,
     reserve_minutes,
-    stuck_dark,
+    stuck,
+    update_peak,
 )
 
 P = Params(load_idle_max=210)
@@ -259,17 +259,53 @@ def test_stuck_dark_is_reported_when_the_guard_blocks_the_cycle():
     heavy = obs(load=290, f=OFF, s=OFF)
     assert step(st, heavy, 0) == []
     assert step(st, heavy, 600) == []
-    assert stuck_dark(st, heavy, 600, P)
-    assert not stuck_dark(st, obs(load=170, f=OFF, s=OFF), 600, P)
-    assert not stuck_dark(st, obs(load=290, f=UP, s=OFF), 600, P)
+    assert stuck(st, heavy, 600, 600, P)
+    assert not stuck(st, obs(load=170, f=OFF, s=OFF), 600, 600, P)
+    assert not stuck(st, obs(load=290, f=UP, s=OFF), 600, 600, P)
 
 
-def test_reserve_is_charge_times_learned_full_load_ratio():
-    assert reserve_minutes(50, None) is None
-    ratio = learn_ratio(None, 57, 100)
-    assert ratio == 0.57
-    assert round(reserve_minutes(46, ratio), 1) == 26.2
-    assert 0.57 < learn_ratio(ratio, 114, 100) < 0.6  # one odd reading moves it little
+def test_stuck_when_a_restore_is_hours_overdue():
+    st = State(ctl=CUT)
+    low = obs(group=False, f=OFF, s=OFF, load=150, reserve=10)
+    assert step(st, low, 0) == []
+    assert step(st, low, 6 * 3600 - 30) == []
+    assert not stuck(st, low, 6 * 3600 - 30, 0, P)
+    step(st, low, 6 * 3600)
+    assert stuck(st, low, 6 * 3600, 0, P)
+
+
+def test_readings_a_minute_apart_still_count_as_continuous():
+    """Three of four polls failing must not stop a shutdown or a restore."""
+    st = State()
+    for t in range(0, 181, 60):
+        acts = jump(st, obs(battery=True), t)
+    assert st.ctl == SHUTDOWN and kinds(acts) == [("shutdown", "f"), ("shutdown", "s")]
+
+    st = State(ctl=CUT)
+    off = obs(group=False, f=OFF, s=OFF, load=150)
+    acts = [a for t in range(0, 361, 60) for a in jump(st, off, t)]
+    assert kinds(acts) == [("restore", None)]
+
+
+def test_reserve_is_runtime_scaled_to_the_heaviest_load_seen():
+    assert reserve_minutes(150, 150, None) is None
+    # Servers off: the UPS says 150 min at 150 W. At a 420 W peak that is 35.
+    assert round(reserve_minutes(150, 150, 420)) == 35
+    # Never more than the UPS's own figure, and equal to it at or above peak.
+    assert reserve_minutes(57, 420, 420) == 57
+    assert reserve_minutes(57, 500, 420) == 57
+    # Conservative against a linear conversion (150 * 150 / 420 = 53.6).
+    assert reserve_minutes(150, 150, 420) < 150 * 150 / 420
+
+
+def test_peak_only_rises_needs_two_readings_and_ignores_a_cut_group():
+    assert update_peak(None, None, 400, True) is None  # one reading is not enough
+    assert update_peak(None, 400, 410, True) == 400
+    assert update_peak(400, 410, 900, True) == 410  # a single spike is not believed
+    assert update_peak(410, 900, 905, True) == 900  # a sustained one is
+    assert update_peak(900, 300, 300, True) == 900  # never falls
+    assert update_peak(None, 150, 150, False) is None  # group off: not a full load
+    assert update_peak(420, 150, 150, False) == 420
 
 
 def test_dead_timer_survives_restart_and_resets_on_any_answer():

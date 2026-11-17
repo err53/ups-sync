@@ -17,10 +17,14 @@ Do these once, in order, when you can watch the servers.
    `false` before cutting over.
 3. **Install and configure** the integration (see the README). Leave it
    disarmed. `sensor.ups_sync_state` should read `idle` and its attributes
-   should show both servers reachable with `chassis_on: true`. After the
-   first reading with both servers up and the battery above 90 %,
-   `full_load_min_per_pct` is filled in. That is the learned link between
-   charge and runtime with the servers running; nothing to enter by hand.
+   should show both servers reachable with `chassis_on: true`, and
+   `peak_load_w` should be filled in within 30 seconds. That is the
+   heaviest UPS load seen with the servers powered. The controller uses it
+   to turn the UPS's runtime figure into "runtime with the servers on". It
+   only ever rises, and steps 4 and 5 raise it to the boot-time draw.
+   If the integration is ever added while the group is off, it cannot learn
+   this and will not restore: turn the group on by hand once the battery is
+   above half.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
    and leave them plugged in. Wait two minutes, read `load_w` from the state
    sensor's attributes, add 40, and enter that as the idle load in the

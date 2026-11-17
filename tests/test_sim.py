@@ -30,12 +30,11 @@ from custom_components.ups_sync.machine import (
     Params,
     ServerObs,
     State,
-    LEARN_MIN_CHARGE,
     cut_guard,
     decide,
-    learn_ratio,
     observe,
     reserve_minutes,
+    update_peak,
 )
 
 DT = 15
@@ -43,10 +42,14 @@ DT = 15
 # Card settings, in minutes of runtime at the present load: low battery 16,
 # shed 3, min return 60 (the most the card accepts).
 E_MAX, E_LB, E_SHED, CARD_RETURN = 57.0, 16.0, 3.0, 60.0
-BASE_W, SERVER_W, STANDBY_W = 150, 120, 10
-FULL_W = BASE_W + 2 * SERVER_W
+# A running server draws anywhere from RUN_MIN_W to RUN_MAX_W and wanders.
+# Booting draws more than the controller may ever have seen it draw.
+BASE_W, STANDBY_W = 150, 10
+RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 175
+FULL_W = BASE_W + 2 * BOOT_W
 NOISE_W = 15
 P = Params(load_idle_max=BASE_W + 2 * STANDBY_W + 40)
+assert BASE_W + STANDBY_W + RUN_MIN_W - NOISE_W > P.load_idle_max  # guard can tell
 NAMES = ("f", "s")
 
 
@@ -64,8 +67,11 @@ class World:
         self.input_until = self.r.randint(600, 7200)
         self.group, self.off_by = True, "ha"  # ha | shed | dead
         self.curve = self.r.uniform(1.0, 1.3)  # Peukert-like exponent
-        self.ratio: float | None = None
+        self.peak: float | None = None
+        self.prev_load: float | None = None
+        self.watts = {n: self.r.uniform(RUN_MIN_W, RUN_MAX_W) for n in NAMES}
         self.blind_until = 0
+        self.restores: list[float] = []  # true reserve at each restore
         self.off_at = 0
         self.srv = dict.fromkeys(NAMES, "RUN")
         self.timer = dict.fromkeys(NAMES, 0)
@@ -85,8 +91,9 @@ class World:
     def load(self) -> float:
         if not self.powered():
             return BASE_W
+        draw = {"OFF": STANDBY_W, "SHUT": SHUT_W, "BOOT": BOOT_W}
         return BASE_W + sum(
-            STANDBY_W if s == "OFF" else SERVER_W for s in self.srv.values()
+            draw.get(s, self.watts[n]) for n, s in self.srv.items()
         )
 
     def drain(self) -> float:
@@ -107,21 +114,16 @@ class World:
             )
             idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
             servers[n] = ServerObs(reach, idrac)
-        charge = 100 * self.e / E_MAX
-        if (
-            self.input
-            and self.group
-            and charge >= LEARN_MIN_CHARGE
-            and all(s.reachable for s in servers.values())
-        ):
-            self.ratio = learn_ratio(self.ratio, self.card_runtime(), charge)
+        load_w = self.load() + self.r.uniform(-NOISE_W, NOISE_W)
+        self.peak = update_peak(self.peak, self.prev_load, load_w, self.group)
+        self.prev_load = load_w
         return Obs(
             input_present=self.input,
             on_battery=not self.input,
             low_battery=not self.input and self.card_runtime() < E_LB,
             runtime_min=self.card_runtime(),
-            reserve_min=reserve_minutes(charge, self.ratio),
-            load_w=self.load() + self.r.uniform(-NOISE_W, NOISE_W),
+            reserve_min=reserve_minutes(self.card_runtime(), load_w, self.peak),
+            load_w=load_w,
             group_on=self.group,
             servers=servers,
         )
@@ -171,6 +173,7 @@ class World:
                 self.set_group(False, "ha")
             elif act.kind == "restore" and not failed:
                 assert o.reserve_min >= P.e_restore
+                self.restores.append(self.e)
                 self.set_group(True, "ha")
             elif act.kind == "wake" and not failed:
                 if self.powered() and self.srv[act.server] == "OFF":
@@ -237,6 +240,10 @@ class World:
                     self.manual.discard(n)
 
         # Physics.
+        for n in NAMES:  # workloads wander
+            self.watts[n] = min(
+                RUN_MAX_W, max(RUN_MIN_W, self.watts[n] + r.uniform(-4, 4))
+            )
         was = self.powered()
         if self.input:
             self.e = min(E_MAX, self.e + 0.5 * DT / 60)

@@ -20,7 +20,6 @@ from pysnmp.smi import view
 _APC = "1.3.6.1.4.1.318.1.1.1"
 OID_STATUS = f"{_APC}.4.1.1.0"  # upsBasicOutputStatus
 OID_RUNTIME = f"{_APC}.2.2.3.0"  # upsAdvBatteryRunTimeRemaining, 1/100 s
-OID_CHARGE = f"{_APC}.2.2.1.0"  # upsAdvBatteryCapacity, percent
 OID_WATTS = f"{_APC}.4.2.8.0"  # upsAdvOutputActivePower
 OID_LOW_BATT = f"{_APC}.5.2.8.0"  # upsAdvConfigLowBatteryRunTime, 1/100 s
 OID_GROUP_STATE = f"{_APC}.12.1.2.1.3"  # .<group>: 1 on, 2 off
@@ -41,7 +40,6 @@ class UpsReading:
     on_battery: bool
     low_battery: bool
     runtime_min: float
-    charge_pct: float
     load_w: float
     group_on: bool
 
@@ -57,9 +55,7 @@ def make_engine() -> SnmpEngine:
     return engine
 
 
-def parse_reading(
-    status: int, runtime: int, charge: int, watts: int, low: int, group: int
-) -> UpsReading:
+def parse_reading(status: int, runtime: int, watts: int, low: int, group: int) -> UpsReading:
     """Turn raw PowerNet values into a reading, or raise if the state is unclear."""
     on_battery = status == STATUS_ON_BATTERY
     if not on_battery and status not in STATUS_INPUT_OK:
@@ -71,7 +67,6 @@ def parse_reading(
         on_battery=on_battery,
         low_battery=on_battery and runtime < low,
         runtime_min=runtime / 6000,
-        charge_pct=float(charge),
         load_w=float(watts),
         group_on=group == 1,
     )
@@ -106,7 +101,6 @@ class ApcClient:
         oids = (
             OID_STATUS,
             OID_RUNTIME,
-            OID_CHARGE,
             OID_WATTS,
             OID_LOW_BATT,
             f"{OID_GROUP_STATE}.{self._group}",

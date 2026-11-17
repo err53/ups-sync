@@ -150,10 +150,10 @@ remaining" at the **present** load. The model's `e` is minutes with every
 server running. With group 2 off the load is about 150 W instead of about
 400 W, so the card's figure is two to three times `e`. Two things followed.
 
-1. **The controller must not gate restore or wake on the UPS's runtime.**
-   It now uses state of charge with a learned full-load ratio (see
-   `docs/STATE_MACHINE.md` section 8). This is a code fix; the model was
-   already right.
+1. **The controller must not gate restore or wake on the UPS's raw
+   runtime.** It now scales that figure to the heaviest load it has seen
+   (see `docs/STATE_MACHINE.md` section 8). This is a code fix; the model
+   was already right.
 2. **The card's own return threshold is weaker than modelled.** The card
    accepts at most 3600 s for "minimum return runtime" (3618 and above are
    rejected; measured on group 3). Sixty minutes at about 150 W is roughly
@@ -177,7 +177,7 @@ a load shed, leaving the restore to the controller, which waits for
 | `MC_Baseline.cfg` (single server) | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 299,970 distinct states, 12.1 M generated, depth 58 |
 | `MC2_NoHuman_safety.cfg` (two servers) | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 1,503,720 distinct states, 98.4 M generated, depth 56, 17 min 22 s |
 | `MC2_NoHuman_live.cfg` (two servers) | `EventuallyRunning` | re-run in progress when this was written |
-| `MC2_Human_sim.cfg` | random simulation with humans | not re-run with the new constants |
+| `MC2_Human_sim.cfg` | random simulation with humans, `-simulate -depth 300`, 15 min on 3 workers | **No violation** in 20.4 M states checked |
 
 Single-server safety across the card's return threshold (each about 290 k
 distinct states): `E_SHED = 6` passes at `E_RETURN` 22, 21, 20, 19;
@@ -209,19 +209,23 @@ last term is `BMAX + SMAX`, so 20 and 17.
 
 The Python simulator runs the production controller code against a UPS
 that reports runtime at the present load along a curve drawn at random per
-run (exponent 1.0 to 1.3), which the TLA+ model cannot express. The card
-may return the group whenever its threshold is met. 1500 runs of 20
-simulated hours per row; 3000 for the first two.
+run (exponent 1.0 to 1.3), which the TLA+ model cannot express. Each
+server's draw wanders between 80 and 160 W while running and is 175 W while
+booting, more than the controller has ever seen it draw. The card may
+return the group whenever its threshold is met. Rows are 1500 runs of 20
+simulated hours unless noted.
 
-| Card shed | Card min return | Result |
-| --- | --- | --- |
-| 3 min | 60 min | **pass** (chosen) |
-| 3 min | 60 min, humans and 30 % of commands failing | **pass** |
-| 6 min | 60 min | pass in this sample; margin is under a minute at the steepest curve |
-| 3 min | 45 min | alarm fired (a shutdown outlasted 24 min); no hard cut |
-| 6 min | 45 min | **hard cut** |
-| 3 or 6 min | 30 min (the card's old value) | **hard cut** |
-| any | restore gated on the UPS's own runtime (the reviewed bug) | fails on the first run |
+| Variant | Result |
+| --- | --- |
+| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 11,038 restores; the lowest true reserve at any restore was 23.1 min against a need of about 17 |
+| same, with humans and 30 % of commands failing (3000 runs) | **pass**. Lowest true reserve at a restore 21.1 min |
+| shed 6 min, card return 60 min | pass in this sample; the model check `old_shed_6` fails |
+| shed 3 min, card return 45 min | pass in this sample |
+| shed 3 min, card return 30 min (the card's old value) | **hard cut** |
+| restore gated on the UPS's raw runtime (the round 1 bug) | fails on the first run |
+| peak load replaced by a moving average of recent load (the round 2 bug) | **hard cut**; restores with as little as 5.5 min of true reserve |
+| curve exponent 0.5 instead of 1.4 | **hard cut** |
+| load and iDRAC guard removed | **hard cut** of a booting server |
 
 ### What this leaves as an assumption
 

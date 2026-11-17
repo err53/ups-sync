@@ -49,7 +49,7 @@ class Obs:
     on_battery: bool
     low_battery: bool
     runtime_min: float  # the UPS's estimate at its PRESENT load; display only
-    reserve_min: float | None  # runtime with every server running; None = unknown
+    reserve_min: float | None  # runtime at the heaviest load seen; None = unknown
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
@@ -93,40 +93,59 @@ def cut_guard(obs: Obs, p: Params) -> bool:
     )
 
 
-# Readings further apart than this do not count as continuous.
-MAX_GAP = 50
+# Readings further apart than this do not count as continuous. Equal to the
+# age at which the controller reports the UPS as unreadable.
+MAX_GAP = 120
 
-# The UPS reports runtime at its present load. With the servers off that is
+# The UPS reports runtime at its PRESENT load. With the servers off that is
 # several times what it will be once they boot, so it cannot gate a restore.
-# State of charge does not depend on load. `ratio` is full-load minutes per
-# percent of charge, learned while every server is running.
-LEARN_MIN_CHARGE = 90
-_LEARN_RATE = 0.05
+# reserve = runtime x (load now / heaviest load seen) ^ CURVE is the runtime
+# at the heaviest load. Lead-acid runtime falls faster than load rises;
+# APC's own tables for this UPS give exponents of 1.2 to 1.36, so 1.4 never
+# overstates. The peak only ever goes up.
+CURVE = 1.4
 
 
-def learn_ratio(ratio: float | None, runtime_min: float, charge_pct: float) -> float:
-    """Blend one (runtime, charge) reading taken at full load into the ratio."""
-    sample = runtime_min / charge_pct
-    return sample if ratio is None else ratio + _LEARN_RATE * (sample - ratio)
+def update_peak(
+    peak: float | None, prev_load: float | None, load_w: float, group_on: bool
+) -> float | None:
+    """Heaviest UPS load seen with the group on. Two readings in a row must
+    agree, so one odd sample cannot raise it."""
+    if not group_on or prev_load is None:
+        return peak
+    return max(peak or 0.0, min(prev_load, load_w))
 
 
-def reserve_minutes(charge_pct: float, ratio: float | None) -> float | None:
-    return None if ratio is None else charge_pct * ratio
+def reserve_minutes(
+    runtime_min: float, load_w: float, peak: float | None
+) -> float | None:
+    """Minutes the UPS would last at the heaviest load seen. None = unknown."""
+    if peak is None:
+        return None
+    return runtime_min * min(1.0, load_w / peak) ** CURVE
 
 
 def _enough_reserve(obs: Obs, p: Params) -> bool:
     return obs.reserve_min is not None and obs.reserve_min >= p.e_restore
 
 
-def stuck_dark(st: State, obs: Obs, wall: float, p: Params) -> bool:
-    """Idle, every server silent for t_dead, yet the guard refuses the cycle."""
-    return (
-        st.ctl == IDLE
-        and obs.group_on
-        and all_dark(obs)
-        and _held(st.dead_since, wall, p.t_dead)
-        and not cut_guard(obs, p)
-    )
+RESTORE_OVERDUE = 6 * 3600
+
+
+def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
+    """Servers are off and the controller cannot bring them back.
+
+    Idle: every server silent for t_dead, yet the guard refuses the cycle.
+    Cut: input has been stable for hours and the reserve still falls short.
+    """
+    if st.ctl == IDLE:
+        return (
+            obs.group_on
+            and all_dark(obs)
+            and _held(st.dead_since, wall, p.t_dead)
+            and not cut_guard(obs, p)
+        )
+    return st.ctl == CUT and _held(st.hold_since, mono, RESTORE_OVERDUE)
 
 
 def _since(cond: bool, since: float | None, now: float) -> float | None:

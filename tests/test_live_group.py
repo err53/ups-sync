@@ -56,7 +56,8 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
     with patch(f"{server}.reachable", _off), patch(f"{server}.chassis_on", _off):
         assert await hass.config_entries.async_setup(entry.entry_id)
         ctl = entry.runtime_data
-        ctl.ratio = 0.5  # pretend servers never run, so nothing is learned
+        # The group is empty and may be off, so no full load is ever seen.
+        ctl.peak = ctl.obs.load_w
         found_on = ctl.obs.group_on
         print(f"\nfound group {GROUP} {'on' if found_on else 'off'}, load {ctl.obs.load_w} W, "
               f"runtime {ctl.obs.runtime_min:.0f} min")

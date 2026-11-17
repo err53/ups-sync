@@ -30,7 +30,7 @@ class Rig:
 
     def __init__(self):
         self.now = 1000.0
-        self.reading = UpsReading(True, False, False, 57.0, 100.0, 400.0, True)
+        self.reading = UpsReading(True, False, False, 57.0, 400.0, True)
         self.read_error = None
         self.reach = {"10.0.0.13": True, "10.0.0.11": True}
         self.chassis = {"10.0.0.12": True, "10.0.0.10": True}
@@ -155,11 +155,11 @@ async def test_dry_run_reports_but_never_acts(hass, rig):
 async def test_armed_full_cycle(hass, rig):
     ctl = await setup(hass, {"load_idle_max": 210})
     await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.ups_sync_armed"}, blocking=True)
-    assert ctl.armed and ctl.calibrated
+    assert ctl.armed
 
     rig.set(input_present=False, on_battery=True)
     await rig.run(ctl, 105)
-    assert rig.calls == []
+    assert rig.calls == [] and ctl.calibrated
     await rig.run(ctl, 30)
     assert rig.calls == [("shutdown", "f"), ("shutdown", "s")]
     assert hass.states.get("sensor.ups_sync_state").state == "shutdown"
@@ -174,16 +174,18 @@ async def test_armed_full_cycle(hass, rig):
     await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", False)
 
-    # The UPS now reports a long runtime because the load is small. With
-    # only 40 % charge the reserve is 23 min: not enough to restore.
-    rig.set(group_on=False, load_w=150.0, runtime_min=150.0, charge_pct=40.0)
+    # The group is off, so the UPS reports a long runtime: 90 min at 150 W.
+    # At the 400 W the servers were seen to draw that is only 23 min.
+    rig.set(group_on=False, load_w=150.0, runtime_min=90.0)
     await rig.run(ctl, 15)
     assert hass.states.get("sensor.ups_sync_state").state == "cut"
+    assert ctl.peak == 400.0  # not dragged down by the light load
     rig.set(input_present=True, on_battery=False)
     await rig.run(ctl, 600)
     assert ("group", True) not in rig.calls
+    assert round(ctl.obs.reserve_min) == 23
 
-    rig.set(charge_pct=50.0)
+    rig.set(runtime_min=110.0)  # 28 min at 400 W
     await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", True)
     rig.set(group_on=True)
@@ -201,7 +203,7 @@ async def test_cut_is_rechecked_just_before_it_happens(hass, rig):
     assert rig.calls == []
 
     rig.now += 15
-    busy = UpsReading(True, False, False, 57.0, 100.0, 290.0, True)
+    busy = UpsReading(True, False, False, 57.0, 290.0, True)
     readings = iter([rig.reading, busy])
     with patch.object(ctl.ups, "read", lambda: _next(readings)):
         await ctl.async_step()
@@ -228,6 +230,24 @@ async def test_failing_group_command_raises_problem_and_notifies_once(hass, rig)
     assert len(notes) == 1 and "FAILED: noAccess" in notes[0]
     await rig.run(ctl, 15)
     assert not ctl.group_cmd_failed and rig.calls[-1] == ("group", False)
+
+    # A failure that a person then fixes by hand also clears the flag.
+    ctl.group_cmd_failed = True
+    rig.set(group_on=False, load_w=150.0)
+    await rig.run(ctl, 15)
+    assert not ctl.group_cmd_failed
+
+
+async def test_peak_load_is_not_learned_while_the_group_is_off(hass, rig):
+    """Before any full-load reading, a restore must be refused, not guessed."""
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, None)
+    ctl = await setup(hass, {"load_idle_max": 210})
+    await ctl.async_set_flag("armed", True)
+    await rig.run(ctl, 900)
+    assert ctl.peak is None and ctl.obs.reserve_min is None
+    assert rig.calls == [] and not ctl.calibrated and ctl.problem
 
 
 async def test_stuck_servers_raise_problem(hass, rig):
@@ -278,16 +298,17 @@ async def test_flags_and_dead_timer_survive_restart(hass, rig):
     again = entry.runtime_data
     assert again is not ctl
     assert again.armed and again.maintenance and again.state.dead_since == dead
+    assert again.peak == 400.0
 
 
 def test_parse_reading():
-    r = parse_reading(2, 376400, 94, 412, 96000, 1)
+    r = parse_reading(2, 376400, 412, 96000, 1)
     assert r.input_present and not r.low_battery and r.group_on
-    assert round(r.runtime_min, 1) == 62.7 and r.load_w == 412 and r.charge_pct == 94
-    r = parse_reading(3, 90000, 30, 412, 96000, 2)
+    assert round(r.runtime_min, 1) == 62.7 and r.load_w == 412
+    r = parse_reading(3, 90000, 412, 96000, 2)
     assert r.on_battery and r.low_battery and not r.group_on
     for status in (1, 7, 9, 15):  # unknown, off, bypass, self-test
         with pytest.raises(UpsError):
-            parse_reading(status, 1, 1, 1, 1, 1)
+            parse_reading(status, 1, 1, 1, 1)
     with pytest.raises(UpsError):
-        parse_reading(2, 1, 1, 1, 1, 3)
+        parse_reading(2, 1, 1, 1, 3)

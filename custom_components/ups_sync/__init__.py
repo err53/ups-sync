@@ -64,9 +64,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
     )
     await ctl.async_load()
     entry.runtime_data = ctl
-    # Unload callbacks run in this order: stop acting, then close SNMP.
-    entry.async_on_unload(ctl.async_stop)
-    entry.async_on_unload(engine.close_dispatcher)
+
+    async def _stop() -> None:
+        await ctl.async_stop()  # waits for a step in flight
+        engine.close_dispatcher()
+
+    entry.async_on_unload(_stop)
     await ctl.async_step()
     entry.async_on_unload(
         async_track_time_interval(
