@@ -30,9 +30,8 @@ class Params:
     t_wake: float = 600  # one server down, one up this long -> wake it
     t_hold: float = 360  # input stable this long -> restore
     t_wait: float = 1440  # SHUTDOWN longer than this -> alarm only
-    t_off: float = 60  # group stays off at least this long, so PSUs fully drain
     t_resend: float = 60  # minimum gap between shutdown commands to one server
-    e_restore: float = 26  # minutes of runtime required to restore or wake
+    e_restore: float = 26  # full-load minutes of reserve to restore or wake
     load_idle_max: float | None = None  # W; None = not calibrated, never cut
 
 
@@ -49,7 +48,8 @@ class Obs:
     input_present: bool
     on_battery: bool
     low_battery: bool
-    runtime_min: float
+    runtime_min: float  # the UPS's estimate at its PRESENT load; display only
+    reserve_min: float | None  # runtime with every server running; None = unknown
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
@@ -63,8 +63,9 @@ class State:
     dark_since: float | None = None  # SHUTDOWN only
     partial_since: float | None = None
     shutdown_since: float | None = None
-    off_since: float | None = None
+    seen_dark_since: float | None = None  # dark, as watched by this process
     dead_since: float | None = None  # wall clock, persisted across restarts
+    last_obs: float | None = None
     acked: set[str] = field(default_factory=set)
     last_cmd: dict[str, float] = field(default_factory=dict)
     alarm: bool = False
@@ -92,6 +93,42 @@ def cut_guard(obs: Obs, p: Params) -> bool:
     )
 
 
+# Readings further apart than this do not count as continuous.
+MAX_GAP = 50
+
+# The UPS reports runtime at its present load. With the servers off that is
+# several times what it will be once they boot, so it cannot gate a restore.
+# State of charge does not depend on load. `ratio` is full-load minutes per
+# percent of charge, learned while every server is running.
+LEARN_MIN_CHARGE = 90
+_LEARN_RATE = 0.05
+
+
+def learn_ratio(ratio: float | None, runtime_min: float, charge_pct: float) -> float:
+    """Blend one (runtime, charge) reading taken at full load into the ratio."""
+    sample = runtime_min / charge_pct
+    return sample if ratio is None else ratio + _LEARN_RATE * (sample - ratio)
+
+
+def reserve_minutes(charge_pct: float, ratio: float | None) -> float | None:
+    return None if ratio is None else charge_pct * ratio
+
+
+def _enough_reserve(obs: Obs, p: Params) -> bool:
+    return obs.reserve_min is not None and obs.reserve_min >= p.e_restore
+
+
+def stuck_dark(st: State, obs: Obs, wall: float, p: Params) -> bool:
+    """Idle, every server silent for t_dead, yet the guard refuses the cycle."""
+    return (
+        st.ctl == IDLE
+        and obs.group_on
+        and all_dark(obs)
+        and _held(st.dead_since, wall, p.t_dead)
+        and not cut_guard(obs, p)
+    )
+
+
 def _since(cond: bool, since: float | None, now: float) -> float | None:
     return (since if since is not None else now) if cond else None
 
@@ -102,11 +139,18 @@ def _held(since: float | None, now: float, need: float) -> bool:
 
 def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     """Reconcile to the observed group state and advance the timers."""
+    if st.last_obs is not None and mono - st.last_obs > MAX_GAP:
+        # Nobody was watching. Nothing has "held" across the gap.
+        st.ob_since = st.hold_since = st.dark_since = None
+        st.partial_since = st.seen_dark_since = None
+    st.last_obs = mono
+
     if st.ctl != CUT and not obs.group_on:
         st.ctl = CUT
         st.acked.clear()
         st.last_cmd.clear()
         st.shutdown_since = None
+        st.hold_since = None  # input must be stable for t_hold AFTER the cut
     elif st.ctl == CUT and obs.group_on:
         st.ctl = IDLE
     if st.ctl != SHUTDOWN:
@@ -115,8 +159,8 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     dark = obs.group_on and all_dark(obs)
     some_down = any(not s.reachable for s in obs.servers.values())
     st.ob_since = _since(obs.on_battery, st.ob_since, mono)
-    st.off_since = _since(not obs.group_on, st.off_since, mono)
-    st.hold_since = _since(obs.input_present, st.hold_since, mono)
+    st.hold_since = _since(obs.input_present and st.ctl != IDLE, st.hold_since, mono)
+    st.seen_dark_since = _since(dark, st.seen_dark_since, mono)
     st.dark_since = _since(st.ctl == SHUTDOWN and dark, st.dark_since, mono)
     st.partial_since = _since(
         obs.group_on and not all_dark(obs) and some_down, st.partial_since, mono
@@ -144,14 +188,19 @@ def decide(
             return _shutdown_cmds(st, obs, mono, p, why)
         if maintenance:
             return acts
-        # DoRecov
-        if cut_guard(obs, p) and _held(st.dead_since, wall, p.t_dead):
+        # DoRecov. dead_since survives restarts and may be stale, so this
+        # process must also have watched the darkness itself for t_grace.
+        if (
+            cut_guard(obs, p)
+            and _held(st.dead_since, wall, p.t_dead)
+            and _held(st.seen_dark_since, mono, p.t_grace)
+        ):
             return [Action("cut", reason="all servers off on live outlets")]
         # DoWol
         if (
             _held(st.partial_since, mono, p.t_wake)
             and obs.input_present
-            and obs.runtime_min >= p.e_restore
+            and _enough_reserve(obs, p)
         ):
             for name, s in obs.servers.items():
                 if not s.reachable and s.chassis_on is False:
@@ -187,8 +236,7 @@ def decide(
         and not obs.group_on
         and obs.input_present
         and _held(st.hold_since, mono, p.t_hold)
-        and _held(st.off_since, mono, p.t_off)
-        and obs.runtime_min >= p.e_restore
+        and _enough_reserve(obs, p)
     ):
         return [Action("restore", reason="input stable")]
     return acts

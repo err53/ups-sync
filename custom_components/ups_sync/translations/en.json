@@ -50,7 +50,6 @@
           "t_dead": "Wait before cutting when servers went off on their own",
           "t_wake": "Wait before powering on a server that is off while another is up",
           "t_hold": "Input stable this long before restore",
-          "t_off": "Keep the group off at least this long before restore",
           "t_wait": "Alarm if shutdown takes longer than this",
           "e_restore": "UPS runtime (minutes) required before restore"
         }

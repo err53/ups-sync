@@ -1,5 +1,11 @@
 # TLC verification results
 
+> **Revised 2026-11-17 after code review.** The card settings changed: load
+> shed is now "runtime < 3 min" (was 6) and the card's return threshold is
+> modelled as 17 (was 30). The section "Revision: runtime is measured at the
+> present load" at the end explains why and lists the re-runs. The tables in
+> between record the earlier runs with `E_SHED = 6`, `E_RETURN = 30`.
+
 Tool: TLA+ `tla2tools.jar` (TLC 2.19), exhaustive breadth-first state
 exploration, 10 workers. Reproduce with:
 
@@ -136,3 +142,95 @@ Counterexamples found and fixed in the two-server model before these runs:
 the load-guard case (design change 3) and the timeout-cut case (design
 change 6). Both traces are reproducible by reverting the corresponding
 lines in `UpsSync2.tla`.
+
+## Revision: runtime is measured at the present load
+
+Code review found that the UPS, and therefore the card, measures "runtime
+remaining" at the **present** load. The model's `e` is minutes with every
+server running. With group 2 off the load is about 150 W instead of about
+400 W, so the card's figure is two to three times `e`. Two things followed.
+
+1. **The controller must not gate restore or wake on the UPS's runtime.**
+   It now uses state of charge with a learned full-load ratio (see
+   `docs/STATE_MACHINE.md` section 8). This is a code fix; the model was
+   already right.
+2. **The card's own return threshold is weaker than modelled.** The card
+   accepts at most 3600 s for "minimum return runtime" (3618 and above are
+   rejected; measured on group 3). Sixty minutes at about 150 W is roughly
+   17 to 23 minutes with the servers running, depending on the battery's
+   load curve. The old value of 30 min is only about 9 to 12. So `E_RETURN`
+   is 17 in the model, not 30, and `E_RETURN >= E_RESTORE` cannot be had.
+
+`E_RETURN` only matters after the card itself switched the group off: a
+load shed, or a full UPS death. The requirement is that a second outage
+starting the moment the servers are powered again can still be survived:
+boot, then shutdown, without reaching the shed threshold. Lowering the shed
+threshold to 3 min restores that margin, and also widens the low-battery to
+shed gap from 10 to 13 min. The card is additionally set to stay off after
+a load shed, leaving the restore to the controller, which waits for
+`E_RESTORE`.
+
+### TLC re-runs with `E_SHED = 3`, `E_RETURN = 17`
+
+| Config | Checks | Result |
+| --- | --- | --- |
+| `MC_Baseline.cfg` (single server) | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 299,970 distinct states, 12.1 M generated, depth 58 |
+| `MC2_NoHuman_safety.cfg` (two servers) | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 1,503,720 distinct states, 98.4 M generated, depth 56, 17 min 22 s |
+| `MC2_NoHuman_live.cfg` (two servers) | `EventuallyRunning` | re-run in progress when this was written |
+| `MC2_Human_sim.cfg` | random simulation with humans | not re-run with the new constants |
+
+Single-server safety across the card's return threshold (each about 290 k
+distinct states): `E_SHED = 6` passes at `E_RETURN` 22, 21, 20, 19;
+`E_SHED = 3` passes at 19, 18, 17, 16. In the model's 2-minute ticks the
+bound is `E_RETURN >= E_SHED + DRAIN_HI * (BMAX + SMAX - 1)`, which is 18
+for a 6-minute shed and 15 for a 3-minute shed. In continuous time the
+last term is `BMAX + SMAX`, so 20 and 17.
+
+### Parameter sweep re-run on the new baseline (single server, safety)
+
+| Variant | Change | Result |
+| --- | --- | --- |
+| baseline | none | PASS, 299,970 distinct states |
+| current_config | shed on any power failure, 60 s on-battery timer, servers via HA's upsd | **FAIL** `NoHardCut` |
+| via_ha_upsd | DIRECT_MON = FALSE | **FAIL** |
+| shed_too_close | E_LB = 10, E_SHED = 6 | **FAIL** |
+| no_srv_ob_timer | T_SRV_OB = 0 | PASS |
+| slow_shutdown_6 | SMAX = 6 (12 min shutdowns) | **FAIL**. The 13 min low-battery to shed gap covers a 12 min shutdown only if it starts the moment low battery is reported; one 2-minute tick of delay is enough to miss. Budget about 10 min. |
+| slow_shutdown_8 | SMAX = 8 (16 min) | **FAIL** |
+| tdead_eq_bmax | T_DEAD = 3 | PASS |
+| no_grace | T_GRACE = 0 | PASS |
+| ha_reliable | HA_CAN_FAIL = FALSE | PASS |
+| long_net_tail | NET_TAIL = 2 | PASS |
+| low_restore | E_RESTORE = 10 | **FAIL** |
+| old_shed_6 | E_SHED = 6 with the card's real return threshold | **FAIL**. This is why the shed threshold was lowered. |
+| card_return_too_low | E_RETURN = 14 | **FAIL**. One below the model's bound of 15. |
+
+### Simulator sweep (`tests/test_sim.py`)
+
+The Python simulator runs the production controller code against a UPS
+that reports runtime at the present load along a curve drawn at random per
+run (exponent 1.0 to 1.3), which the TLA+ model cannot express. The card
+may return the group whenever its threshold is met. 1500 runs of 20
+simulated hours per row; 3000 for the first two.
+
+| Card shed | Card min return | Result |
+| --- | --- | --- |
+| 3 min | 60 min | **pass** (chosen) |
+| 3 min | 60 min, humans and 30 % of commands failing | **pass** |
+| 6 min | 60 min | pass in this sample; margin is under a minute at the steepest curve |
+| 3 min | 45 min | alarm fired (a shutdown outlasted 24 min); no hard cut |
+| 6 min | 45 min | **hard cut** |
+| 3 or 6 min | 30 min (the card's old value) | **hard cut** |
+| any | restore gated on the UPS's own runtime (the reviewed bug) | fails on the first run |
+
+### What this leaves as an assumption
+
+After a full UPS death the card will power the servers at 60 min of
+light-load runtime no matter what the controller wants. That is safe only
+while 60 light-load minutes are worth at least 17 with the servers
+running, i.e. while group 1's draw is at least about 35 % of the total
+with the servers on (38 % if the battery's load curve is at its steepest).
+Today it is about 37 to 40 % (145 to 160 W of 390 to 410 W), which puts
+the figure at 17 to 19 minutes. The margin is thin. If group 1's load drops, or a server is
+added, re-check it. A full UPS death needs an outage long enough to drain
+the UPS with the servers already off, about two to three hours.

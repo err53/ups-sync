@@ -20,3 +20,5 @@ run no_grace              T_GRACE=0                                 # cut as soo
 run ha_reliable           HA_CAN_FAIL=FALSE
 run long_net_tail         NET_TAIL=2                                # ping dies 4 min before power-off
 run low_restore           E_RESTORE=10                              # restore with little runtime in the bank
+run old_shed_6            E_SHED=6                                  # previous shed threshold, same card return
+run card_return_too_low   E_RETURN=14                               # card returns the group with too little reserve

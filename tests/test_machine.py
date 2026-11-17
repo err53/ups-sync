@@ -9,7 +9,10 @@ from custom_components.ups_sync.machine import (
     ServerObs,
     State,
     decide,
+    learn_ratio,
     observe,
+    reserve_minutes,
+    stuck_dark,
 )
 
 P = Params(load_idle_max=210)
@@ -18,12 +21,13 @@ OFF = ServerObs(False, False)
 BOOTING = ServerObs(False, True)
 
 
-def obs(battery=False, low=False, runtime=57, load=400, group=True, f=UP, s=UP):
+def obs(battery=False, low=False, reserve=57, load=400, group=True, f=UP, s=UP):
     return Obs(
         input_present=not battery,
         on_battery=battery,
         low_battery=low,
-        runtime_min=runtime,
+        runtime_min=150,  # at present load: must never gate anything
+        reserve_min=reserve,
         load_w=load,
         group_on=group,
         servers={"f": f, "s": s},
@@ -31,12 +35,27 @@ def obs(battery=False, low=False, runtime=57, load=400, group=True, f=UP, s=UP):
 
 
 def step(st, o, t, p=P, maintenance=False):
+    """Hold reading `o` from the previous step until time t, polling every
+    30 s like the real loop. Returns every action emitted on the way."""
+    acts = []
+    last = st.last_obs
+    while last is not None and t - last > 30:
+        last += 30
+        observe(st, o, last, last)
+        acts += decide(st, o, last, last, p, maintenance)
+    observe(st, o, t, t)
+    return acts + decide(st, o, t, t, p, maintenance)
+
+
+def jump(st, o, t, p=P, maintenance=False):
+    """One reading at time t with nothing in between (a gap in polling)."""
     observe(st, o, t, t)
     return decide(st, o, t, t, p, maintenance)
 
 
 def kinds(acts):
-    return [(a.kind, a.server) for a in acts]
+    """Distinct (kind, server) pairs in order; repeats of a retried command collapse."""
+    return list(dict.fromkeys((a.kind, a.server) for a in acts))
 
 
 def shut_down(st, t=0):
@@ -67,7 +86,7 @@ def test_on_battery_for_t_ob_starts_shutdown():
 
 def test_low_battery_starts_shutdown_at_once():
     st = State()
-    acts = step(st, obs(battery=True, low=True, runtime=15), 0)
+    acts = step(st, obs(battery=True, low=True), 0)
     assert kinds(acts) == [("shutdown", "f"), ("shutdown", "s")]
 
 
@@ -86,13 +105,13 @@ def test_cut_after_ack_and_grace_then_reconcile_to_cut():
     st = State()
     t = shut_down(st)
     dark = obs(battery=True, load=170, f=OFF, s=OFF)
-    assert step(st, dark, t + 60) == []
-    assert step(st, dark, t + 170) == []
-    assert kinds(step(st, dark, t + 180)) == [("cut", None)]
+    assert jump(st, dark, t + 15) == []  # first dark reading
+    assert step(st, dark, t + 134) == []
+    acts = step(st, dark, t + 135)
+    assert kinds(acts) == [("cut", None)]
     assert st.ctl == SHUTDOWN  # not CUT until the group is seen off
-    step(st, obs(battery=True, load=150, group=False, f=OFF, s=OFF), t + 195)
+    step(st, obs(battery=True, load=150, group=False, f=OFF, s=OFF), t + 150)
     assert st.ctl == CUT
-
 
 def test_cut_blocked_by_load_chassis_or_missing_calibration():
     """Design change 3: ping cannot tell OFF from BOOT; load and iDRAC can."""
@@ -112,9 +131,8 @@ def test_unknown_idrac_falls_back_to_load_guard():
     st = State()
     t = shut_down(st)
     dark = obs(battery=True, load=170, f=ServerObs(False, None), s=OFF)
-    step(st, dark, t + 60)
-    assert kinds(step(st, dark, t + 180)) == [("cut", None)]
-
+    jump(st, dark, t + 15)
+    assert kinds(step(st, dark, t + 135)) == [("cut", None)]
 
 def test_unacked_servers_need_t_dead():
     st = State()
@@ -140,27 +158,25 @@ def test_no_timeout_cut_only_an_alarm():
 def test_input_return_does_not_abort_an_acked_shutdown():
     st = State()
     t = shut_down(st)
-    for dt in (400, 800):
-        assert kinds(step(st, obs(), t + dt)) == [("shutdown", "f"), ("shutdown", "s")]
+    assert kinds(step(st, obs(), t + 800)) == [("shutdown", "f"), ("shutdown", "s")]
     assert st.ctl == SHUTDOWN
-
 
 def test_abort_when_no_command_was_accepted_and_power_is_back():
     st = State()
     step(st, obs(battery=True), 0)
     step(st, obs(battery=True), 120)  # commands sent, none acked
-    step(st, obs(), 130)
-    assert kinds(step(st, obs(), 500)) == [("abort", None)]
+    assert jump(st, obs(), 135) == []  # input back
+    assert ("abort", None) not in kinds(step(st, obs(), 494))
+    assert ("abort", None) in kinds(step(st, obs(), 495))
     assert st.ctl == IDLE
-
 
 def test_abort_after_alarm_when_power_is_back():
     st = State()
     t = shut_down(st)
-    step(st, obs(battery=True), t + 1440)  # alarm
-    step(st, obs(), t + 1500)
-    assert kinds(step(st, obs(), t + 1900)) == [("abort", None)]
-
+    assert ("alarm", None) in kinds(step(st, obs(battery=True), t + 1440))
+    assert st.ctl == SHUTDOWN
+    assert ("abort", None) in kinds(step(st, obs(), t + 1900))
+    assert st.ctl == IDLE
 
 def test_reconcile_after_restart():
     """Design change 1: a fresh controller trusts the group, not a flag."""
@@ -171,40 +187,89 @@ def test_reconcile_after_restart():
     assert st.ctl == IDLE
 
 
-def test_restore_needs_stable_input_and_runtime():
+def test_restore_needs_stable_input_and_reserve():
     st = State(ctl=CUT)
     off = dict(group=False, f=OFF, s=OFF, load=150)
     assert step(st, obs(**off), 0) == []
     assert step(st, obs(**off), 359) == []
-    assert step(st, obs(runtime=25, **off), 360) == []
+    assert step(st, obs(reserve=25, **off), 360) == []
+    assert step(st, obs(reserve=None, **off), 360) == []  # ratio never learned
     assert step(st, obs(**off), 360, maintenance=True) == []
     assert kinds(step(st, obs(**off), 360)) == [("restore", None)]
     assert step(st, obs(battery=True, **off), 375) == []
     assert step(st, obs(**off), 390) == []  # hold timer restarted
 
 
-def test_group_stays_off_for_t_off_even_if_input_has_been_stable_for_days():
+def test_restore_waits_t_hold_after_the_cut_even_if_input_was_stable_for_days():
     st = State()
-    on = obs(load=170, f=OFF, s=OFF)
-    step(st, on, 0)
+    assert step(st, obs(), 0) == []
+    assert step(st, obs(), 100000) == []
     off = obs(group=False, f=OFF, s=OFF, load=150)
-    assert step(st, off, 100000) == [] and st.ctl == CUT
-    assert step(st, off, 100059) == []
-    assert kinds(step(st, off, 100060)) == [("restore", None)]
-
+    assert jump(st, off, 100015) == [] and st.ctl == CUT
+    assert step(st, off, 100374) == []
+    assert kinds(step(st, off, 100375)) == [("restore", None)]
 
 def test_recover_cuts_dead_outlets_without_needing_input():
     """Design changes 2 and 6."""
+    dead = obs(load=170, f=OFF, s=OFF)
     st = State()
-    dead = obs(battery=True, load=170, f=OFF, s=OFF)
-    observe(st, dead, 0, 1000)
-    st.ob_since = None  # isolate the recover rule from the shutdown rule
-    assert decide(st, obs(load=170, f=OFF, s=OFF), 0, 1599, P, False) == []
-    assert kinds(decide(st, obs(load=170, f=OFF, s=OFF), 0, 1600, P, False)) == [
+    assert step(st, dead, 0) == []
+    assert step(st, dead, 599) == []
+    assert kinds(step(st, dead, 600)) == [("cut", None)]
+    assert step(st, dead, 600, maintenance=True) == []
+    assert step(st, obs(load=290, f=OFF, s=OFF), 600) == []
+    # On battery the same rule applies; the shutdown rule wins at t_ob and
+    # then cuts by the same guard.
+    st = State()
+    step(st, obs(battery=True, load=170, f=OFF, s=OFF), 0)
+    step(st, obs(battery=True, load=170, f=OFF, s=OFF), 120)
+    assert kinds(step(st, obs(battery=True, load=170, f=OFF, s=OFF), 720)) == [
         ("cut", None)
     ]
-    assert decide(st, obs(load=170, f=OFF, s=OFF), 0, 1600, P, True) == []
-    assert decide(st, obs(load=290, f=OFF, s=OFF), 0, 1600, P, False) == []
+
+
+def test_stale_stored_dead_timer_needs_fresh_watching_first():
+    """A value loaded from disk cannot cut by itself."""
+    dead = obs(load=170, f=OFF, s=OFF)
+    st = State(dead_since=-9000.0)  # from storage, "dark for hours"
+    assert step(st, dead, 0) == []
+    assert step(st, dead, 119) == []
+    assert kinds(step(st, dead, 120)) == [("cut", None)]
+
+
+def test_a_gap_in_readings_restarts_the_timers():
+    st = State(ctl=CUT)
+    off = obs(group=False, f=OFF, s=OFF, load=150)
+    assert jump(st, off, 0) == []
+    assert jump(st, off, 400) == []  # 400 s unobserved is not "stable for 400 s"
+    assert step(st, off, 759) == []
+    assert kinds(step(st, off, 760)) == [("restore", None)]
+
+    st = State()
+    dead = obs(load=170, f=OFF, s=OFF)
+    jump(st, dead, 0)
+    assert jump(st, dead, 605) == []  # not watched in between
+    st = State()
+    jump(st, obs(battery=True), 0)
+    assert jump(st, obs(battery=True), 130) == []  # t_ob needs watching too
+
+
+def test_stuck_dark_is_reported_when_the_guard_blocks_the_cycle():
+    st = State()
+    heavy = obs(load=290, f=OFF, s=OFF)
+    assert step(st, heavy, 0) == []
+    assert step(st, heavy, 600) == []
+    assert stuck_dark(st, heavy, 600, P)
+    assert not stuck_dark(st, obs(load=170, f=OFF, s=OFF), 600, P)
+    assert not stuck_dark(st, obs(load=290, f=UP, s=OFF), 600, P)
+
+
+def test_reserve_is_charge_times_learned_full_load_ratio():
+    assert reserve_minutes(50, None) is None
+    ratio = learn_ratio(None, 57, 100)
+    assert ratio == 0.57
+    assert round(reserve_minutes(46, ratio), 1) == 26.2
+    assert 0.57 < learn_ratio(ratio, 114, 100) < 0.6  # one odd reading moves it little
 
 
 def test_dead_timer_survives_restart_and_resets_on_any_answer():
@@ -226,7 +291,8 @@ def test_wake_only_the_server_that_is_off():
     for blocked in (
         obs(f=BOOTING, s=UP),
         obs(f=ServerObs(False, None), s=UP),
-        obs(f=OFF, s=UP, runtime=20),
+        obs(f=OFF, s=UP, reserve=20),
+        obs(f=OFF, s=UP, reserve=None),
     ):
         st = State()
         step(st, blocked, 0)

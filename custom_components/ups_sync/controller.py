@@ -17,6 +17,7 @@ from .const import DOMAIN, STALE_SECONDS
 from .machine import (
     CUT,
     IDLE,
+    LEARN_MIN_CHARGE,
     SHUTDOWN,
     Action,
     Obs,
@@ -25,10 +26,13 @@ from .machine import (
     State,
     cut_guard,
     decide,
+    learn_ratio,
     observe,
+    reserve_minutes,
+    stuck_dark,
 )
 from .servers import Server, ServerError
-from .snmp import ApcClient, UpsError
+from .snmp import ApcClient, UpsError, UpsReading
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +60,11 @@ class Controller:
         self.last_action = ""
         self.last_ok: float | None = None
         self.last_error = ""
+        self.ratio: float | None = None  # full-load minutes per percent of charge
+        self.group_cmd_failed = False
+        self.stuck = False
+        self._stopped = False
+        self._last_note = ""
         self._store: Store = Store(hass, 1, f"{DOMAIN}.{entry_id}")
         self._saved: dict = {}
         self._lock = asyncio.Lock()
@@ -69,6 +78,9 @@ class Controller:
         self.armed = bool(data.get("armed", False))
         self.maintenance = bool(data.get("maintenance", False))
         self.state.dead_since = data.get("dead_since")
+        if self.state.dead_since is not None and self.state.dead_since > time.time():
+            self.state.dead_since = None  # the clock stepped backwards
+        self.ratio = data.get("ratio")
         self._saved = self._snapshot()
 
     def _snapshot(self) -> dict:
@@ -76,7 +88,17 @@ class Controller:
             "armed": self.armed,
             "maintenance": self.maintenance,
             "dead_since": self.state.dead_since,
+            "ratio": self._ratio_to_save(),
         }
+
+    def _ratio_to_save(self) -> float | None:
+        """The stored ratio, replaced only once the average has moved by 3 %."""
+        saved = self._saved.get("ratio")
+        if self.ratio is None:
+            return saved
+        if saved is None or abs(self.ratio - saved) > 0.03 * saved:
+            return round(self.ratio, 3)
+        return saved
 
     async def _save_if_changed(self) -> None:
         snap = self._snapshot()
@@ -87,6 +109,10 @@ class Controller:
     async def async_set_flag(self, name: str, value: bool) -> None:
         async with self._lock:
             setattr(self, name, value)
+            if name == "maintenance" and not value:
+                # Whatever was done by hand must be watched afresh.
+                self.state.dead_since = self.state.seen_dark_since = None
+                self.state.partial_since = None
             await self._save_if_changed()
         self._notify_listeners()
 
@@ -106,7 +132,22 @@ class Controller:
 
     @property
     def problem(self) -> bool:
-        return self.stale or self.state.alarm or self.params.load_idle_max is None
+        return (
+            self.stale
+            or self.state.alarm
+            or self.stuck
+            or self.group_cmd_failed
+            or not self.calibrated
+        )
+
+    @property
+    def calibrated(self) -> bool:
+        return self.params.load_idle_max is not None and self.ratio is not None
+
+    async def async_stop(self) -> None:
+        """Wait for a step in flight, then never act again (unload, reload)."""
+        async with self._lock:
+            self._stopped = True
 
     def attributes(self) -> dict:
         attrs = {
@@ -114,7 +155,10 @@ class Controller:
             "maintenance": self.maintenance,
             "alarm": self.state.alarm,
             "ups_stale": self.stale,
-            "calibrated": self.params.load_idle_max is not None,
+            "calibrated": self.calibrated,
+            "stuck_servers_off": self.stuck,
+            "group_command_failed": self.group_cmd_failed,
+            "full_load_min_per_pct": self.ratio,
             "acked": sorted(self.state.acked),
             "would_act": self.would_act,
             "last_action": self.last_action,
@@ -127,14 +171,29 @@ class Controller:
     # ---- main loop -------------------------------------------------------
 
     async def _gather(self) -> Obs:
+        ups: UpsReading
         ups, *probes = await asyncio.gather(
             self.ups.read(),
             *(s.reachable() for s in self.servers.values()),
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
+        if (
+            ups.input_present
+            and ups.group_on
+            and ups.charge_pct >= LEARN_MIN_CHARGE
+            and all(probes[:n])
+        ):
+            # Every server is up: this runtime figure is the full-load one.
+            self.ratio = learn_ratio(self.ratio, ups.runtime_min, ups.charge_pct)
         return Obs(
-            **asdict(ups),
+            input_present=ups.input_present,
+            on_battery=ups.on_battery,
+            low_battery=ups.low_battery,
+            runtime_min=ups.runtime_min,
+            reserve_min=reserve_minutes(ups.charge_pct, self.ratio),
+            load_w=ups.load_w,
+            group_on=ups.group_on,
             servers={
                 name: ServerObs(probes[i], probes[n + i])
                 for i, name in enumerate(self.servers)
@@ -145,6 +204,8 @@ class Controller:
         if self._lock.locked():
             return  # previous step still running
         async with self._lock:
+            if self._stopped:
+                return
             try:
                 obs = await self._gather()
             except UpsError as exc:
@@ -164,6 +225,7 @@ class Controller:
         mono, wall = time.monotonic(), time.time()
         st = self.state
         observe(st, obs, mono, wall)
+        self.stuck = not self.maintenance and stuck_dark(st, obs, wall, self.params)
         if not self.armed:
             # Dry run: never leave the observable states, never act.
             st.ctl = IDLE if obs.group_on else CUT
@@ -202,11 +264,15 @@ class Controller:
                     _LOGGER.warning(self.last_error)
                     return
                 await self.ups.set_group(False)
+                self.group_cmd_failed = False
             elif act.kind == "restore":
                 await self.ups.set_group(True)
+                self.group_cmd_failed = False
         except (ServerError, UpsError) as exc:
             self.last_error = f"{text} FAILED: {exc}"
             _LOGGER.error(self.last_error)
+            if act.kind in ("cut", "restore"):
+                self.group_cmd_failed = True
             # A failed shutdown command repeats every t_resend; say it once.
             if act.kind == "shutdown":
                 if act.server in self._failed:
@@ -219,6 +285,9 @@ class Controller:
         await self._notify(text)
 
     async def _notify(self, message: str) -> None:
+        if message == self._last_note:
+            return  # a retried command says the same thing every poll
+        self._last_note = message
         self.hass.bus.async_fire(f"{DOMAIN}_action", {"message": message})
         persistent_notification.async_create(self.hass, message, title="UPS sync")
         for target in self.notify_services:

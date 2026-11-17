@@ -30,7 +30,7 @@ class Rig:
 
     def __init__(self):
         self.now = 1000.0
-        self.reading = UpsReading(True, False, False, 57.0, 400.0, True)
+        self.reading = UpsReading(True, False, False, 57.0, 100.0, 400.0, True)
         self.read_error = None
         self.reach = {"10.0.0.13": True, "10.0.0.11": True}
         self.chassis = {"10.0.0.12": True, "10.0.0.10": True}
@@ -67,8 +67,8 @@ class Rig:
         self.patches = [
             patch("custom_components.ups_sync.ApcClient", FakeApc),
             patch("custom_components.ups_sync.config_flow.ApcClient", FakeApc),
-            patch("custom_components.ups_sync.SnmpEngine", _engine),
-            patch("custom_components.ups_sync.config_flow.SnmpEngine", _engine),
+            patch("custom_components.ups_sync.make_engine", _engine),
+            patch("custom_components.ups_sync.config_flow.make_engine", _engine),
             patch(f"{server}.reachable", reachable),
             patch(f"{server}.chassis_on", chassis_on),
             patch(f"{server}.shutdown", shutdown),
@@ -78,6 +78,12 @@ class Rig:
 
     def set(self, **changes):
         self.reading = UpsReading(**{**self.reading.__dict__, **changes})
+
+    async def run(self, ctl, seconds):
+        """Let time pass with the controller polling every 15 s."""
+        for _ in range(seconds // 15):
+            self.now += 15
+            await ctl.async_step()
 
 
 @pytest.fixture
@@ -139,9 +145,7 @@ async def test_config_flow_errors(hass, rig):
 async def test_dry_run_reports_but_never_acts(hass, rig):
     ctl = await setup(hass, {"load_idle_max": 210})
     rig.set(input_present=False, on_battery=True)
-    await ctl.async_step()
-    rig.now += 130
-    await ctl.async_step()
+    await rig.run(ctl, 135)
     assert rig.calls == []
     assert ctl.state.ctl == "idle"
     assert [w.split(":")[0] for w in ctl.would_act] == ["shutdown f", "shutdown s"]
@@ -151,38 +155,39 @@ async def test_dry_run_reports_but_never_acts(hass, rig):
 async def test_armed_full_cycle(hass, rig):
     ctl = await setup(hass, {"load_idle_max": 210})
     await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.ups_sync_armed"}, blocking=True)
-    assert ctl.armed
+    assert ctl.armed and ctl.calibrated
 
     rig.set(input_present=False, on_battery=True)
-    await ctl.async_step()
-    rig.now += 130
-    await ctl.async_step()
+    await rig.run(ctl, 105)
+    assert rig.calls == []
+    await rig.run(ctl, 30)
     assert rig.calls == [("shutdown", "f"), ("shutdown", "s")]
     assert hass.states.get("sensor.ups_sync_state").state == "shutdown"
 
     # Servers go quiet. Load still high: no cut.
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, False)
-    await ctl.async_step()
-    rig.now += 130
-    await ctl.async_step()
+    await rig.run(ctl, 300)
     assert ("group", False) not in rig.calls
 
     rig.set(load_w=170.0)
-    await ctl.async_step()
+    await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", False)
 
-    rig.set(group_on=False, load_w=150.0)
-    await ctl.async_step()
+    # The UPS now reports a long runtime because the load is small. With
+    # only 40 % charge the reserve is 23 min: not enough to restore.
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0, charge_pct=40.0)
+    await rig.run(ctl, 15)
     assert hass.states.get("sensor.ups_sync_state").state == "cut"
-
     rig.set(input_present=True, on_battery=False)
-    await ctl.async_step()
-    rig.now += 370
-    await ctl.async_step()
+    await rig.run(ctl, 600)
+    assert ("group", True) not in rig.calls
+
+    rig.set(charge_pct=50.0)
+    await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", True)
     rig.set(group_on=True)
-    await ctl.async_step()
+    await rig.run(ctl, 15)
     assert hass.states.get("sensor.ups_sync_state").state == "idle"
 
 
@@ -192,14 +197,56 @@ async def test_cut_is_rechecked_just_before_it_happens(hass, rig):
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, False)
     rig.set(load_w=170.0)
-    await ctl.async_step()
-    rig.now += 610
+    await rig.run(ctl, 600)
+    assert rig.calls == []
 
-    readings = iter([rig.reading, UpsReading(True, False, False, 57.0, 290.0, True)])
+    rig.now += 15
+    busy = UpsReading(True, False, False, 57.0, 100.0, 290.0, True)
+    readings = iter([rig.reading, busy])
     with patch.object(ctl.ups, "read", lambda: _next(readings)):
         await ctl.async_step()
     assert ("group", False) not in rig.calls
     assert "re-check" in ctl.last_error
+
+
+async def test_failing_group_command_raises_problem_and_notifies_once(hass, rig):
+    ctl = await setup(hass, {"load_idle_max": 210})
+    await ctl.async_set_flag("armed", True)
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    rig.set(load_w=170.0)
+    notes = []
+    hass.bus.async_listen("ups_sync_action", lambda e: notes.append(e.data["message"]))
+
+    async def refuse(on):
+        raise UpsError("noAccess")
+
+    with patch.object(ctl.ups, "set_group", refuse):
+        await rig.run(ctl, 690)
+        await hass.async_block_till_done()
+    assert ctl.group_cmd_failed and ctl.problem
+    assert len(notes) == 1 and "FAILED: noAccess" in notes[0]
+    await rig.run(ctl, 15)
+    assert not ctl.group_cmd_failed and rig.calls[-1] == ("group", False)
+
+
+async def test_stuck_servers_raise_problem(hass, rig):
+    ctl = await setup(hass, {"load_idle_max": 210})
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    await rig.run(ctl, 615)  # load stays 400 W: the guard refuses the cycle
+    assert ctl.stuck and ctl.problem
+    assert hass.states.get("sensor.ups_sync_state").attributes["stuck_servers_off"]
+
+
+async def test_unload_stops_the_controller(hass, rig):
+    ctl = await setup(hass, {"load_idle_max": 210})
+    await ctl.async_set_flag("armed", True)
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    rig.set(input_present=False, on_battery=True)
+    await rig.run(ctl, 300)
+    assert rig.calls == []
 
 
 async def _next(it):
@@ -213,8 +260,7 @@ async def test_uncalibrated_and_stale_raise_problem(hass, rig):
     await ctl.async_step()
     assert not ctl.problem
     rig.read_error = "timeout"
-    rig.now += 200
-    await ctl.async_step()
+    await rig.run(ctl, 195)
     assert ctl.problem and ctl.state.ctl == "idle"
 
 
@@ -235,13 +281,13 @@ async def test_flags_and_dead_timer_survive_restart(hass, rig):
 
 
 def test_parse_reading():
-    r = parse_reading(2, 376400, 412, 96000, 1)
+    r = parse_reading(2, 376400, 94, 412, 96000, 1)
     assert r.input_present and not r.low_battery and r.group_on
-    assert round(r.runtime_min, 1) == 62.7 and r.load_w == 412
-    r = parse_reading(3, 90000, 412, 96000, 2)
+    assert round(r.runtime_min, 1) == 62.7 and r.load_w == 412 and r.charge_pct == 94
+    r = parse_reading(3, 90000, 30, 412, 96000, 2)
     assert r.on_battery and r.low_battery and not r.group_on
     for status in (1, 7, 9, 15):  # unknown, off, bypass, self-test
         with pytest.raises(UpsError):
-            parse_reading(status, 1, 1, 1, 1)
+            parse_reading(status, 1, 1, 1, 1, 1)
     with pytest.raises(UpsError):
-        parse_reading(2, 1, 1, 1, 3)
+        parse_reading(2, 1, 1, 1, 1, 3)

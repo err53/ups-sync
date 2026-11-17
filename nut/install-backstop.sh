@@ -69,12 +69,15 @@ AT ONBATT * START-TIMER onbatt $ON_BATTERY_SECONDS
 AT ONLINE * CANCEL-TIMER onbatt
 CONF
 
+# upssched runs this as the unprivileged "nut" user, which may not call
+# shutdown. It asks upsmon instead: "-c fsd" makes the running monitor run
+# its SHUTDOWNCMD as root. As a secondary it sets no flag on the UPS.
 cat > upssched-cmd <<'CONF'
 #!/bin/sh
 case "$1" in
     onbatt)
         logger -t ups-sync "on battery too long, shutting down"
-        /sbin/shutdown -h +0
+        /usr/sbin/upsmon -c fsd
         ;;
 esac
 CONF
@@ -102,3 +105,10 @@ sleep 2
 echo "battery.runtime: $(upsc apc@localhost battery.runtime 2>/dev/null)"
 echo "battery.runtime.low: $(upsc apc@localhost battery.runtime.low 2>/dev/null)"
 echo "nut-monitor: $(systemctl is-active nut-monitor.service)"
+# The timer path only works if the nut user may signal the monitor.
+if su -s /bin/sh nut -c 'kill -0 "$(cat /run/nut/upsmon.pid)"'; then
+    echo "on-battery timer: nut user can signal upsmon"
+else
+    echo "on-battery timer BROKEN: nut user cannot signal upsmon" >&2
+    exit 1
+fi

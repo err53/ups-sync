@@ -3,8 +3,14 @@
 A Python port of the environment in formal/UpsSync2.tla, in real seconds
 instead of 2-minute ticks: adversarial input loss, HA crashes, the card's
 own load shed and auto-return, server NUT backstops, variable shutdown and
-boot times, ping dying before power-off, iDRAC sometimes silent, and
-(optionally) failing commands and humans pressing power buttons.
+boot times, ping dying before power-off, iDRAC sometimes silent, noisy load
+readings, stretches where the UPS cannot be read, and (optionally) failing
+commands and humans pressing power buttons.
+
+Like the real UPS, this one reports runtime at its PRESENT load, with a
+load-to-runtime curve the controller does not know, and its low-battery flag,
+load shed and return thresholds all use that figure. The card may turn the
+group back on by itself whenever its own threshold is met.
 
 Checked on every step: no server loses power unless it is off (NoHardCut),
 shutdown is only ever started on battery (NoSpurious). Checked at the end:
@@ -24,14 +30,22 @@ from custom_components.ups_sync.machine import (
     Params,
     ServerObs,
     State,
+    LEARN_MIN_CHARGE,
     cut_guard,
     decide,
+    learn_ratio,
     observe,
+    reserve_minutes,
 )
 
 DT = 15
-E_MAX, E_LB, E_SHED, E_RETURN = 57.0, 16.0, 6.0, 30.0
+# Energy `e` is minutes of runtime with both servers running.
+# Card settings, in minutes of runtime at the present load: low battery 16,
+# shed 3, min return 60 (the most the card accepts).
+E_MAX, E_LB, E_SHED, CARD_RETURN = 57.0, 16.0, 3.0, 60.0
 BASE_W, SERVER_W, STANDBY_W = 150, 120, 10
+FULL_W = BASE_W + 2 * SERVER_W
+NOISE_W = 15
 P = Params(load_idle_max=BASE_W + 2 * STANDBY_W + 40)
 NAMES = ("f", "s")
 
@@ -48,7 +62,11 @@ class World:
         self.e = E_MAX
         self.input = True
         self.input_until = self.r.randint(600, 7200)
-        self.group, self.by_card = True, False
+        self.group, self.off_by = True, "ha"  # ha | shed | dead
+        self.curve = self.r.uniform(1.0, 1.3)  # Peukert-like exponent
+        self.ratio: float | None = None
+        self.blind_until = 0
+        self.off_at = 0
         self.srv = dict.fromkeys(NAMES, "RUN")
         self.timer = dict.fromkeys(NAMES, 0)
         self.tail = dict.fromkeys(NAMES, 0)
@@ -64,25 +82,46 @@ class World:
     def powered(self) -> bool:
         return self.group and (self.input or self.e > 0)
 
+    def load(self) -> float:
+        if not self.powered():
+            return BASE_W
+        return BASE_W + sum(
+            STANDBY_W if s == "OFF" else SERVER_W for s in self.srv.values()
+        )
+
+    def drain(self) -> float:
+        """Energy used per minute on battery, in full-load minutes."""
+        return (self.load() / FULL_W) ** self.curve
+
+    def card_runtime(self) -> float:
+        """What the UPS reports: minutes left at the present load."""
+        return self.e / self.drain()
+
     def obs(self) -> Obs:
         powered = self.powered()
         servers = {}
-        load = BASE_W
         for n in NAMES:
             state = self.srv[n]
-            if powered:
-                load += STANDBY_W if state == "OFF" else SERVER_W
             reach = powered and (
                 state == "RUN" or (state == "SHUT" and self.timer[n] > self.tail[n])
             )
             idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
             servers[n] = ServerObs(reach, idrac)
+        charge = 100 * self.e / E_MAX
+        if (
+            self.input
+            and self.group
+            and charge >= LEARN_MIN_CHARGE
+            and all(s.reachable for s in servers.values())
+        ):
+            self.ratio = learn_ratio(self.ratio, self.card_runtime(), charge)
         return Obs(
             input_present=self.input,
             on_battery=not self.input,
-            low_battery=not self.input and self.e < E_LB,
-            runtime_min=self.e,
-            load_w=load,
+            low_battery=not self.input and self.card_runtime() < E_LB,
+            runtime_min=self.card_runtime(),
+            reserve_min=reserve_minutes(charge, self.ratio),
+            load_w=self.load() + self.r.uniform(-NOISE_W, NOISE_W),
             group_on=self.group,
             servers=servers,
         )
@@ -98,9 +137,11 @@ class World:
         self.srv[n] = "BOOT"
         self.timer[n] = self.r.randint(120, 360)
 
-    def set_group(self, on: bool, by_card: bool) -> None:
+    def set_group(self, on: bool, by: str) -> None:
         was = self.powered()
-        self.group, self.by_card = on, by_card
+        self.group, self.off_by = on, by
+        if not on:
+            self.off_at = self.t
         self.power_edge(was)
 
     def power_edge(self, was: bool) -> None:
@@ -127,9 +168,10 @@ class World:
                         self.begin_shutdown(act.server)
             elif act.kind == "cut" and not failed:
                 assert cut_guard(o, P)
-                self.set_group(False, by_card=False)
+                self.set_group(False, "ha")
             elif act.kind == "restore" and not failed:
-                self.set_group(True, by_card=False)
+                assert o.reserve_min >= P.e_restore
+                self.set_group(True, "ha")
             elif act.kind == "wake" and not failed:
                 if self.powered() and self.srv[act.server] == "OFF":
                     self.begin_boot(act.server)
@@ -154,7 +196,9 @@ class World:
         if not (self.input or self.e > 0):
             self.ha_down_until = max(self.ha_down_until, self.t + 120)
 
-        if self.t >= self.ha_down_until:
+        if not self.settling and r.random() < 1 / 800:
+            self.blind_until = self.t + r.randint(15, 420)  # UPS unreadable
+        if self.t >= self.ha_down_until and self.t >= self.blind_until:
             self.controller()
 
         # Server NUT backstops, polling the card directly.
@@ -163,15 +207,23 @@ class World:
                 self.srv_ob[n] = 0
             elif self.powered():
                 self.srv_ob[n] += DT
-                if self.srv[n] == "RUN" and (self.e < E_LB or self.srv_ob[n] >= 600):
+                low = self.card_runtime() < E_LB
+                if self.srv[n] == "RUN" and (low or self.srv_ob[n] >= 600):
                     self.begin_shutdown(n)
 
-        # Card: load shed, and return after min return runtime.
-        if self.group and not self.input and self.e < E_SHED:
-            self.set_group(False, by_card=True)
-        elif not self.group and self.input and self.e >= E_RETURN:
-            if self.by_card or (not self.settling and r.random() < 0.01):
-                self.set_group(True, by_card=True)
+        # Card: load shed. And return: certain after a full UPS death, and
+        # treated as possible at any time otherwise, so nothing here depends
+        # on the card's "stay off after load shed" setting.
+        if self.group and not self.input and self.card_runtime() < E_SHED:
+            self.set_group(False, "shed")
+        elif (
+            not self.group
+            and self.input
+            and self.card_runtime() >= CARD_RETURN
+            and self.t - self.off_at >= 60  # not in the same instant as the cut
+        ):
+            if self.off_by == "dead" or (not self.settling and r.random() < 0.01):
+                self.set_group(True, "ha")
 
         # Humans, within the documented assumptions.
         if self.humans and not self.settling and self.input and self.e >= P.e_restore:
@@ -189,11 +241,11 @@ class World:
         if self.input:
             self.e = min(E_MAX, self.e + 0.5 * DT / 60)
         else:
-            busy = self.powered() and any(s != "OFF" for s in self.srv.values())
-            self.e = max(0.0, self.e - (1.0 if busy else 0.5) * DT / 60)
+            self.e = max(0.0, self.e - self.drain() * DT / 60)
             if self.e == 0 and self.group:
-                self.by_card = True  # card holds the group off after UPS death
+                self.off_by = "dead"  # card holds the group off after UPS death
                 self.group = False
+                self.off_at = self.t
         self.power_edge(was)
         for n in NAMES:
             if self.srv[n] in ("SHUT", "BOOT") and self.powered():

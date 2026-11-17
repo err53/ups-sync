@@ -18,7 +18,7 @@ written; see [docs/STATE_MACHINE.md](docs/STATE_MACHINE.md) and
 | --- | --- | --- |
 | Idle | group on | on battery for 2 min, or low battery: shut the servers down |
 | Shutting down | servers told to power off | all servers are off and the UPS load confirms it: cut the group |
-| Power cut | group off | input stable for 6 min with 26 min of runtime: turn the group on |
+| Power cut | group off | input stable for 6 min and enough charge to run every server for 26 min: turn the group on |
 
 Two extra rules run while idle. If every server is off but the outlets are
 live, the group is power-cycled so the servers boot. If one server is off
@@ -43,7 +43,7 @@ and reports what it would do.
 | Entity | Purpose |
 | --- | --- |
 | `sensor.ups_sync_state` | idle, shutdown, or cut. Attributes hold every reading and the dry-run plan. |
-| `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, or the idle load is not set |
+| `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or calibration is incomplete |
 | `switch.ups_sync_armed` | off: observe only. on: act. |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Outage shutdown still works. |
 
@@ -57,9 +57,9 @@ down and are part of what was verified:
 
 - Each server runs its own NUT client pointed at the card
   ([nut/install-backstop.sh](nut/install-backstop.sh)).
-- The card sheds the group below 6 min of runtime, never on a timer, and
+- The card sheds the group below 3 min of runtime, never on a timer, and
   reports low battery at 16 min ([scripts/cutover.sh](scripts/cutover.sh)).
-- The card's minimum return runtime for the group is 30 min.
+- The card's minimum return runtime for the group is 60 min, its maximum.
 - Each server's BIOS powers on when AC returns.
 
 ## Development

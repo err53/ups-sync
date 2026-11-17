@@ -63,7 +63,7 @@ own actions (load shed, auto-return) harmless.
   is a persisted "last time any server answered" timestamp, so it survives
   HA restarts.
 - **Wake (iDRAC power-on)** when some server is unreachable while another is
-  up, group 2 is powered, input is present, runtime ≥ `E_RESTORE`, and this
+  up, group 2 is powered, input is present, reserve ≥ `E_RESTORE`, and this
   has held for `T_WOL`. This covers the leftover of an interrupted shutdown
   (HA crashed after powering off one server). Cycling the group would
   hard-cut the running server, so the down one is powered on individually
@@ -95,13 +95,17 @@ own actions (load shed, auto-return) harmless.
   deliberately no timeout cut. Every cut goes through the load guard; a cut
   that ignores it is a hard cut by construction. The model proves the alarm
   never fires unless a human keeps powering servers back on mid-sequence.
-- Input returning during SHUTDOWN does **not** abort. A half-finished
-  shutdown is worse than a finished one followed by a restore.
+- Input returning during SHUTDOWN does **not** abort a shutdown that a
+  server has accepted. A half-finished shutdown is worse than a finished
+  one followed by a restore. The one exception is in section 8: if no
+  server accepted a command, or the alarm has already fired, and input has
+  been stable for `T_HOLD`, the controller returns to IDLE.
 
 ### CUT (group 2 off by us)
 
 - `holdT` = consecutive ticks with APC input present.
-- **→ IDLE (restore)** when `holdT ≥ T_HOLD` and runtime ≥ `E_RESTORE`:
+- **→ IDLE (restore)** when `holdT ≥ T_HOLD` and reserve ≥ `E_RESTORE`
+  (reserve is in minutes with every server running; see section 8):
   SNMP immediate-on on group 2. Servers boot via BIOS.
 
 ## 3. Backstops (work with HA dead)
@@ -109,9 +113,11 @@ own actions (load shed, auto-return) harmless.
 1. **Server NUT clients** monitor the NMC directly over SNMP. Shut down on
    LB, or after `T_SRV_OB` on battery.
 2. **NMC load shed** on group 2: "UPS runtime remaining < E_SHED". Never
-   "power failure longer than N seconds".
-3. **NMC min return runtime** on group 2 keeps servers off after a full UPS
-   death until runtime ≥ `E_RETURN`.
+   "power failure longer than N seconds". After a shed the group is set to
+   stay off; the controller restores it.
+3. **NMC min return runtime** on group 2, set to the card's maximum, keeps
+   servers off after a full UPS death until the reserve is back above
+   `E_RETURN`.
 4. **BIOS restore on AC** on both servers.
 
 ## 4. Properties checked
@@ -136,7 +142,7 @@ table, pass/fail per variant, and counterexample traces.
   load and use it as the full-charge budget).
 - Nobody presses power buttons or runs `poweroff` by hand while the UPS is on
   battery, and nobody powers a server **on** while the UPS has less than
-  `E_RESTORE` (26 min) runtime. The model found that a human powering a
+  `E_RESTORE` of reserve (about half charge). The model found that a human powering a
   server on from a live outlet with ~11 min of runtime left, during a
   flapping grid, ends in a hard cut that no controller can prevent. Let HA
   bring the servers back; it waits for the runtime margin.
@@ -152,7 +158,8 @@ table, pass/fail per variant, and counterexample traces.
 - Both iDRACs are reachable from the HA host over the group-1-powered
   network whenever their outlet has power (dedicated iDRAC NIC or shared
   LOM; both work with the host off). iDRAC credentials live in HA
-  `secrets.yaml`.
+  the integration's config entry, like any other Home Assistant
+  integration's.
 - The APC's own "min return runtime" and "load shed" settings are set as
   specified in the config table and not changed by hand.
 
@@ -167,10 +174,10 @@ table, pass/fail per variant, and counterexample traces.
 | `T_DEAD` = 5 | 10 min dark (persisted) before cutting a group whose servers are all off |
 | `T_WOL` = 5 | 10 min with one server down and one up before iDRAC power-on of the down one |
 | `T_HOLD` = 3 | 6 min stable input before restore |
-| `E_RESTORE` = 26 | restore only with ≥ 26 min runtime |
+| `E_RESTORE` = 26 | restore only with a reserve of ≥ 26 min *with every server running* (about 46 % charge today) |
 | `E_LB` = 16 | UPS low-battery threshold 16 min (NMC "Low battery duration") |
-| `E_SHED` = 6 | NMC load shed group 2 when runtime < 6 min |
-| `E_RETURN` = 30 | NMC min return runtime 30 min (already set) |
+| `E_SHED` = 3 | NMC load shed group 2 when runtime < 3 min. Was 6; lowered so the card's own return threshold is enough (see RESULTS.md) |
+| `E_RETURN` = 17 | NMC min return runtime 60 min, the card's maximum. The card measures at the present load, so with the servers off this is only about 17 to 23 min with them running |
 | `T_SRV_OB` = 5 | server NUT client shuts down after 10 min on battery |
 
 ## 8. Where the code differs from the model
@@ -182,17 +189,23 @@ the model already allows.
 
 | Difference | Why it is safe |
 | --- | --- |
-| Real seconds and 15 s polling instead of 2-minute ticks. A timer counts how long a condition has held without interruption. | A refinement: the model's "held for N ticks" becomes "held for N x 120 s". |
+| **Battery reserve is not the UPS's runtime figure.** The UPS reports runtime at its *present* load. With the servers off that is two to three times what it will be once they boot, so comparing it with `E_RESTORE` would restore far too early. The model's `e` is minutes with every server running. The code uses state of charge instead: `reserve = charge % x ratio`, where `ratio` (full-load minutes per percent) is learned from the UPS's own runtime figure whenever input is present, charge is at least 90 %, and every server is up. It is stored, and it follows battery ageing and load changes. Until it has been learned once, restore and wake are refused. | This is what makes the code match the model's `e`. Found in review; the first version compared raw runtime. |
+| Real seconds and 15 s polling instead of 2-minute ticks. A timer counts how long a condition has been *watched* without interruption. If two readings are more than 50 s apart (failed UPS reads, a stalled HA), every timer restarts. | A refinement: "held for N ticks" becomes "held for N x 120 s", and unobserved time never counts. |
+| The stored "all servers silent since" time survives restarts, as in the model. It may be stale, so a power-cycle also needs this process to have watched the silence itself for `T_GRACE`. A stored time in the future is discarded. | Only removes cuts. |
 | The state only becomes CUT or returns to IDLE when the group is *observed* off or on. Cut and restore emit a command and wait. | A failed SNMP write is retried on the next poll instead of being assumed. |
 | The cut guard is evaluated again on fresh readings immediately before the SNMP write. | Only removes cuts. |
-| If the UPS cannot be read, or reports bypass, self-test or off, the step is skipped: no decision, timers hold. The problem sensor turns on after 2 min. | Only removes actions. The server backstops do not depend on Home Assistant. |
+| The iDRAC check treats every state except a clear `Off` as on (`PoweringOn`, `PoweringOff`). A refused TCP connection counts as reachable, because a refusal comes from a running kernel. | Only removes cuts. |
+| If the UPS cannot be read, or reports bypass, self-test or off, the step is skipped: no decision. The problem sensor turns on after 2 min. | Only removes actions. The server backstops do not depend on Home Assistant. |
 | Abort: in SHUTDOWN, if input has been stable for `T_HOLD` and either no server accepted a command or the alarm has fired, return to IDLE. The model has no failing commands, so it never needs this. | Returning to IDLE is exactly what an HA restart does, and the model lets HA restart at any step. |
-| The group stays off for at least 60 s before a restore. | Only delays restore. Lets the power supplies drain so the BIOS sees a real AC loss. |
-| Maintenance also blocks restore, not only recover and wake. | Only removes actions. |
+| Maintenance also blocks restore, not only recover and wake. Turning maintenance off restarts the recover and wake timers. | Only removes actions. |
 | Disarmed (the default after install): readings and timers run, decisions are computed on a copy and published as `would_act`, nothing is sent. | No actions. |
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
+| The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
 | The "grid down but APC online" notification is not part of the integration. | Notification only. A plain automation on the wall connector's voltage does it. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives
-this code through random outages, including failing commands and humans,
-and checks `NoHardCut`, `NoSpurious`, the alarm, and recovery on each run.
+this code through random outages. Unlike the model, its UPS reports runtime
+at the present load along a curve the controller does not know, its load
+readings are noisy, the UPS is sometimes unreadable, and the card may switch
+the group back on by itself whenever its own threshold is met. It checks
+`NoHardCut`, `NoSpurious`, the alarm, and recovery on every run.

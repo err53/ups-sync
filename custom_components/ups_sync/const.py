@@ -17,9 +17,10 @@ CONF_ADD_ANOTHER = "add_another"
 OPT_LOAD_IDLE_MAX = "load_idle_max"
 OPT_NOTIFY = "notify_services"
 # Option name -> Params field. Seconds, except e_restore (minutes).
-OPT_TIMINGS = (
-    "t_ob", "t_grace", "t_dead", "t_wake", "t_hold", "t_off", "t_wait", "e_restore"
-)
+OPT_TIMINGS = ("t_ob", "t_grace", "t_dead", "t_wake", "t_hold", "t_wait", "e_restore")
+# Lowest value the options form accepts. Default 10 s.
+# e_restore: formal/RESULTS.md needs shed + boot + shutdown = 17 min at least.
+MIN_OPTION = {"e_restore": 20}
 
 POLL_SECONDS = 15
 STALE_SECONDS = 120

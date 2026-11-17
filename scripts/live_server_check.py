@@ -37,10 +37,11 @@ async def main(name, host, port, idrac, creds):
             assert "401" not in str(exc) and "403" not in str(exc), exc
             print(f"{name}: power-on refused as expected for a running server: {exc}")
         bad = srv.Server(
-            srv.ServerConfig(name, host, 9, idrac, user, "wrong-password"), session
+            srv.ServerConfig(name, host, int(port), idrac, user, "wrong-password"),
+            session,
         )
-        assert await bad.reachable() is False and await bad.chassis_on() is None
-        print(f"{name}: closed port -> unreachable, bad password -> chassis unknown")
+        assert await bad.chassis_on() is None
+        print(f"{name}: bad iDRAC password -> chassis unknown")
 
 
 asyncio.run(main(*sys.argv[1:]))

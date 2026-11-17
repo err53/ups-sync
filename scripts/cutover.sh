@@ -25,6 +25,7 @@ SHED_ON_BATT=$T.10.$G          # shed after time on battery: 1 off, 2 on
 SHED_RUNTIME=$T.11.$G          # shed below runtime remaining: 1 off, 2 on
 SHED_RUNTIME_S=$T.14.$G        # that runtime, seconds
 MIN_RETURN_S=$T.6.$G           # min return runtime, seconds
+SHED_RESTART=$T.9.$G           # after a shed: 1 restart by itself, 2 stay off
 
 get() { snmpget -v2c -c "$R" -Oqv "$UPS_HOST" "$1"; }
 put() {
@@ -46,6 +47,7 @@ show() {
     echo "  shed below runtime          = $(get $SHED_RUNTIME)   (1 off, 2 on)"
     echo "  shed runtime threshold (s)  = $(get $SHED_RUNTIME_S)"
     echo "  min return runtime (s)      = $(get $MIN_RETURN_S)"
+    echo "  after a load shed           = $(get $SHED_RESTART)   (1 restart by itself, 2 stay off)"
     if [ -n "${TRUENAS_HOST:-}" ]; then
         echo "TrueNAS $TRUENAS_HOST UPS service"
         truenas GET /ups | python3 -c '
@@ -63,10 +65,14 @@ show)
 apply)
     echo "Card:"
     put $LOW_BATT t 96000 "low-battery duration (16 min)"
-    put $SHED_RUNTIME_S i 360 "shed runtime threshold (6 min)"
+    put $SHED_RUNTIME_S i 180 "shed runtime threshold (3 min)"
     put $SHED_RUNTIME i 2 "shed below runtime (on)"
     put $SHED_ON_BATT i 1 "shed after time on battery (off)"
-    put $MIN_RETURN_S i 1800 "min return runtime (30 min)"
+    # The card measures runtime at the present load. With the servers off,
+    # 60 min is only about 17 to 23 min once they run. 3600 is the most the
+    # card accepts; see formal/RESULTS.md.
+    put $MIN_RETURN_S i 3600 "min return runtime (60 min, the maximum)"
+    put $SHED_RESTART i 2 "after a load shed (stay off; the controller restores)"
     if [ -n "${TRUENAS_HOST:-}" ]; then
         echo "TrueNAS: watch the card directly, shut down on low battery or 10 min on battery"
         # powerdown stays false: TrueNAS must never tell the UPS to power off.
@@ -85,6 +91,8 @@ rollback)
     put $SHED_RUNTIME i 1 "shed below runtime (off)"
     put $SHED_RUNTIME_S i 1200 "shed runtime threshold"
     put $LOW_BATT t 12000 "low-battery duration (2 min)"
+    put $MIN_RETURN_S i 1800 "min return runtime (30 min)"
+    put $SHED_RESTART i 1 "after a load shed (restart by itself)"
     if [ -n "${TRUENAS_HOST:-}" ]; then
         echo "TrueNAS: back to following Home Assistant's NUT server"
         truenas PUT /ups '{"mode": "SLAVE", "shutdown": "BATT", "shutdowntimer": 60, "rmonitor": true}' >/dev/null

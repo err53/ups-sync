@@ -9,7 +9,6 @@ from homeassistant.const import CONF_HOST, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
-from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
 from .const import (
     CONF_GROUP,
@@ -24,7 +23,7 @@ from .const import (
 from .controller import Controller
 from .machine import Params
 from .servers import Server, ServerConfig
-from .snmp import ApcClient
+from .snmp import ApcClient, make_engine
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
@@ -38,9 +37,7 @@ def params_from_options(options: dict) -> Params:
 
 async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
     data = entry.data
-    # SnmpEngine() reads MIB files from disk.
-    engine = await hass.async_add_executor_job(SnmpEngine)
-    entry.async_on_unload(engine.close_dispatcher)
+    engine = await hass.async_add_executor_job(make_engine)
     ups = ApcClient(
         engine,
         data[CONF_HOST],
@@ -67,6 +64,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
     )
     await ctl.async_load()
     entry.runtime_data = ctl
+    # Unload callbacks run in this order: stop acting, then close SNMP.
+    entry.async_on_unload(ctl.async_stop)
+    entry.async_on_unload(engine.close_dispatcher)
     await ctl.async_step()
     entry.async_on_unload(
         async_track_time_interval(

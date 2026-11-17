@@ -37,6 +37,8 @@ class Server:
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(self.cfg.host, self.cfg.reach_port), 3
             )
+        except ConnectionRefusedError:
+            return True  # a refusal comes from a running kernel
         except (OSError, asyncio.TimeoutError):
             return False
         writer.close()
@@ -67,7 +69,8 @@ class Server:
             state = (await self._idrac("GET", _SYSTEM)).get("PowerState")
         except ServerError:
             return None
-        return {"On": True, "Off": False}.get(state)
+        # PoweringOn, PoweringOff and anything unexpected count as on.
+        return None if state is None else state != "Off"
 
     async def _reset(self, kind: str) -> None:
         await self._idrac(

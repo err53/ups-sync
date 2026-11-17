@@ -7,7 +7,6 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
 from .const import (
     CONF_ADD_ANOTHER,
@@ -24,11 +23,12 @@ from .const import (
     DOMAIN,
     OPT_LOAD_IDLE_MAX,
     OPT_NOTIFY,
+    MIN_OPTION,
     OPT_TIMINGS,
 )
 from .machine import Params
 from .servers import Server, ServerConfig
-from .snmp import ApcClient, UpsError
+from .snmp import ApcClient, UpsError, make_engine
 
 UPS_SCHEMA = vol.Schema(
     {
@@ -69,7 +69,7 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                 f"{user_input[CONF_HOST]}:{user_input[CONF_GROUP]}"
             )
             self._abort_if_unique_id_configured()
-            engine = await self.hass.async_add_executor_job(SnmpEngine)
+            engine = await self.hass.async_add_executor_job(make_engine)
             try:
                 await ApcClient(
                     engine,
@@ -137,8 +137,9 @@ class UpsSyncOptionsFlow(OptionsFlow):
             vol.Optional(OPT_NOTIFY, default=""): str,
         }
         for key in OPT_TIMINGS:
+            # A zero would act on a single reading; a small reserve is unsafe.
             schema[vol.Required(key, default=getattr(defaults, key))] = vol.All(
-                vol.Coerce(float), vol.Range(min=0)
+                vol.Coerce(float), vol.Range(min=MIN_OPTION.get(key, 10))
             )
         return self.async_show_form(
             step_id="init",
