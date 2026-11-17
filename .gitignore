@@ -1,0 +1,8 @@
+formal/states/
+formal/tools/tla2tools.jar
+
+.env
+.env.*
+__pycache__/
+.pytest_cache/
+.venv/
