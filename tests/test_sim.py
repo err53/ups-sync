@@ -30,8 +30,10 @@ from custom_components.ups_sync.machine import (
     Params,
     ServerObs,
     State,
+    all_up_since,
     cut_guard,
     decide,
+    enter_cut,
     observe,
     peak_sample,
     reserve_minutes,
@@ -44,7 +46,9 @@ DT = 15
 # shed 3, min return 60 (the most the card accepts).
 E_MAX, E_LB, E_SHED, CARD_RETURN = 57.0, 16.0, 3.0, 60.0
 # A running server draws anywhere from RUN_MIN_W to RUN_MAX_W and wanders.
-# Booting draws far more than the controller ever counts towards its peak.
+# Booting draws far more than the controller ever counts towards its peak,
+# and a booting server already answers on the network for the last part of
+# its boot.
 BASE_W, STANDBY_W = 150, 10
 RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 280
 FULL_W = BASE_W + 2 * RUN_MAX_W
@@ -70,6 +74,8 @@ class World:
         self.curve = self.r.uniform(1.0, 1.3)  # Peukert-like exponent
         self.peak: float | None = None
         self.prev_sample: float | None = None
+        self.up_since: float | None = None
+        self.boot_tail = dict.fromkeys(NAMES, 0)
         self.prev_load: float | None = None
         self.watts = {n: self.r.uniform(RUN_MIN_W, RUN_MAX_W) for n in NAMES}
         self.blind_until = 0
@@ -112,13 +118,16 @@ class World:
         for n in NAMES:
             state = self.srv[n]
             reach = powered and (
-                state == "RUN" or (state == "SHUT" and self.timer[n] > self.tail[n])
+                state == "RUN"
+                or (state == "SHUT" and self.timer[n] > self.tail[n])
+                or (state == "BOOT" and self.timer[n] <= self.boot_tail[n])
             )
             idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
             servers[n] = ServerObs(reach, idrac)
         load_w = self.load() + self.r.uniform(-NOISE_W, NOISE_W)
         all_up = all(s.reachable for s in servers.values())
-        sample = peak_sample(load_w, self.group, all_up)
+        self.up_since = all_up_since(self.up_since, self.group, all_up, self.t)
+        sample = peak_sample(load_w, self.up_since, self.t)
         self.peak = update_peak(self.peak, self.prev_sample, sample)
         self.prev_sample = sample
         reserve_load = min(self.prev_load or load_w, load_w)
@@ -144,6 +153,7 @@ class World:
     def begin_boot(self, n: str) -> None:
         self.srv[n] = "BOOT"
         self.timer[n] = self.r.randint(120, 360)
+        self.boot_tail[n] = self.r.randint(0, 120)
 
     def set_group(self, on: bool, by: str) -> None:
         was = self.powered()
@@ -172,11 +182,12 @@ class World:
                 assert o.on_battery or self.st.shutdown_since != self.t, "spurious"
                 if not failed:
                     self.st.acked.add(act.server)
-                    if self.srv[act.server] == "RUN":
+                    if self.srv[act.server] in ("RUN", "BOOT"):  # it answered
                         self.begin_shutdown(act.server)
             elif act.kind == "cut" and not failed:
                 assert cut_guard(o, P)
                 self.set_group(False, "ha")
+                enter_cut(self.st)
             elif act.kind == "restore" and not failed:
                 assert o.reserve_min >= P.e_restore
                 self.restores.append(self.e)
@@ -202,6 +213,7 @@ class World:
             if r.random() < 1 / 1500:
                 self.ha_down_until = self.t + r.randint(30, 900)
                 self.st = State(dead_since=self.st.dead_since)  # restart
+                self.up_since = self.prev_sample = self.prev_load = None
         if not (self.input or self.e > 0):
             self.ha_down_until = max(self.ha_down_until, self.t + 120)
 

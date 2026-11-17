@@ -96,14 +96,15 @@ def rig():
         p.stop()
 
 
-async def setup(hass, options=None):
+async def setup(hass, rig, options=None):
     entry = MockConfigEntry(
         domain=DOMAIN, data={**UPS, "servers": SERVERS}, options=options or {}
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    await entry.runtime_data.async_step()  # a second reading: the peak load is known
+    # Servers up for five minutes: the peak load is known.
+    await rig.run(entry.runtime_data, 315)
     return entry.runtime_data
 
 
@@ -144,7 +145,7 @@ async def test_config_flow_errors(hass, rig):
 
 
 async def test_dry_run_reports_but_never_acts(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     rig.set(input_present=False, on_battery=True)
     await rig.run(ctl, 135)
     assert rig.calls == []
@@ -154,7 +155,7 @@ async def test_dry_run_reports_but_never_acts(hass, rig):
 
 
 async def test_armed_full_cycle(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.ups_sync_armed"}, blocking=True)
     assert ctl.armed
 
@@ -195,7 +196,7 @@ async def test_armed_full_cycle(hass, rig):
 
 
 async def test_cut_is_rechecked_just_before_it_happens(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await ctl.async_set_flag("armed", True)
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, False)
@@ -213,7 +214,7 @@ async def test_cut_is_rechecked_just_before_it_happens(hass, rig):
 
 
 async def test_failing_group_command_raises_problem_and_notifies_once(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await ctl.async_set_flag("armed", True)
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, False)
@@ -244,7 +245,7 @@ async def test_peak_load_is_not_learned_while_the_group_is_off(hass, rig):
     rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, None)
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await ctl.async_set_flag("armed", True)
     await rig.run(ctl, 900)
     assert ctl.peak is None and ctl.obs.reserve_min is None
@@ -255,20 +256,22 @@ async def test_peak_load_ignores_standby_and_boot_readings(hass, rig):
     """Group on but a server off or booting: neither 170 W nor 700 W counts."""
     rig.reach["10.0.0.13"] = False
     rig.set(load_w=170.0)
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await rig.run(ctl, 60)
     assert ctl.peak is None and not ctl.calibrated
     rig.set(load_w=700.0)  # booting
     await rig.run(ctl, 60)
     assert ctl.peak is None
-    rig.reach["10.0.0.13"] = True
+    rig.reach["10.0.0.13"] = True  # answers, but its boot is not over
+    await rig.run(ctl, 285)
+    assert ctl.peak is None
     rig.set(load_w=400.0)
-    await rig.run(ctl, 30)
+    await rig.run(ctl, 45)
     assert ctl.peak == 400.0 and ctl.calibrated
 
 
 async def test_stuck_servers_raise_problem(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, False)
     await rig.run(ctl, 615)  # load stays 400 W: the guard refuses the cycle
@@ -277,7 +280,7 @@ async def test_stuck_servers_raise_problem(hass, rig):
 
 
 async def test_unload_stops_the_controller(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await ctl.async_set_flag("armed", True)
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -291,7 +294,7 @@ async def _next(it):
 
 
 async def test_uncalibrated_and_stale_raise_problem(hass, rig):
-    ctl = await setup(hass)
+    ctl = await setup(hass, rig)
     assert hass.states.get("binary_sensor.ups_sync_problem").state == "on"  # uncalibrated
     ctl.params = type(ctl.params)(load_idle_max=210)
     await ctl.async_step()
@@ -302,7 +305,7 @@ async def test_uncalibrated_and_stale_raise_problem(hass, rig):
 
 
 async def test_flags_and_dead_timer_survive_restart(hass, rig):
-    ctl = await setup(hass, {"load_idle_max": 210})
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
     await ctl.async_set_flag("armed", True)
     await ctl.async_set_flag("maintenance", True)
     rig.reach = dict.fromkeys(rig.reach, False)

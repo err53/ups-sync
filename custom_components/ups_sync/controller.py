@@ -23,8 +23,10 @@ from .machine import (
     Params,
     ServerObs,
     State,
+    all_up_since,
     cut_guard,
     decide,
+    enter_cut,
     peak_sample,
     observe,
     reserve_minutes,
@@ -62,6 +64,7 @@ class Controller:
         self.last_error = ""
         self.peak: float | None = None  # heaviest load seen with every server up
         self._prev_sample: float | None = None
+        self._up_since: float | None = None
         self._prev_load: float | None = None
         self._wanted_group: bool | None = None
         self.group_cmd_failed = False
@@ -172,7 +175,11 @@ class Controller:
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
-        sample = peak_sample(ups.load_w, ups.group_on, all(probes[:n]))
+        mono = time.monotonic()
+        self._up_since = all_up_since(
+            self._up_since, ups.group_on, all(probes[:n]), mono
+        )
+        sample = peak_sample(ups.load_w, self._up_since, mono)
         self.peak = update_peak(self.peak, self._prev_sample, sample)
         self._prev_sample = sample
         # The lower of the last two loads, in case the runtime figure lags.
@@ -263,6 +270,7 @@ class Controller:
                 self._wanted_group = False
                 await self.ups.set_group(False)
                 self.group_cmd_failed = False
+                enter_cut(self.state)
             elif act.kind == "restore":
                 self._wanted_group = True
                 await self.ups.set_group(True)

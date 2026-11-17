@@ -105,16 +105,27 @@ MAX_GAP = 120
 # faster than load rises; APC's own tables for this UPS give exponents of
 # 1.2 to 1.36, so 1.4 never overstates. The peak only ever goes up.
 #
-# Readings taken while a server is off, booting or shutting down are left
-# out on purpose. Standby draw would understate the peak (restore too
-# early). A boot surge would overstate it for good (never restore).
+# Readings taken while a server is off or booting are left out on purpose.
+# Standby draw would understate the peak (restore too early). A boot surge
+# would overstate it for good (never restore). A server answers on the
+# network well before its boot is over, so a reading only counts once every
+# server has been reachable without a break for PEAK_SETTLE.
 # e_restore leaves room for a boot that draws up to about twice as much.
 CURVE = 1.4
+PEAK_SETTLE = 300
 
 
-def peak_sample(load_w: float, group_on: bool, all_up: bool) -> float | None:
+def all_up_since(
+    since: float | None, group_on: bool, all_up: bool, mono: float
+) -> float | None:
+    """When the current unbroken stretch of "group on, every server up" began."""
+    return _since(group_on and all_up, since, mono)
+
+
+def peak_sample(load_w: float, up_since: float | None, mono: float) -> float | None:
     """This reading, if it may count towards the peak."""
-    return load_w if group_on and all_up and load_w > 0 else None
+    settled = up_since is not None and mono - up_since >= PEAK_SETTLE
+    return load_w if settled and load_w > 0 else None
 
 
 def update_peak(
@@ -167,6 +178,22 @@ def _held(since: float | None, now: float, need: float) -> bool:
     return since is not None and now - since >= need
 
 
+def enter_cut(st: State) -> None:
+    """The group is off: seen off, or the card just acknowledged our command.
+
+    Ending the shutdown episode on the acknowledgement matters when the UPS
+    then cannot be read for a while. If the group comes back on in that
+    time, a controller still in SHUTDOWN would shut the servers down again
+    on good power. From CUT, seeing the group on simply means IDLE.
+    """
+    st.ctl = CUT
+    st.acked.clear()
+    st.last_cmd.clear()
+    st.shutdown_since = None
+    st.alarm = False
+    st.hold_since = None  # input must be stable for t_hold AFTER the cut
+
+
 def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     """Reconcile to the observed group state and advance the timers."""
     if st.last_obs is not None and mono - st.last_obs > MAX_GAP:
@@ -176,11 +203,7 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     st.last_obs = mono
 
     if st.ctl != CUT and not obs.group_on:
-        st.ctl = CUT
-        st.acked.clear()
-        st.last_cmd.clear()
-        st.shutdown_since = None
-        st.hold_since = None  # input must be stable for t_hold AFTER the cut
+        enter_cut(st)
     elif st.ctl == CUT and obs.group_on:
         st.ctl = IDLE
     if st.ctl != SHUTDOWN:

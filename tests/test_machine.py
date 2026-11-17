@@ -9,6 +9,8 @@ from custom_components.ups_sync.machine import (
     ServerObs,
     State,
     decide,
+    enter_cut,
+    all_up_since,
     observe,
     peak_sample,
     reserve_minutes,
@@ -113,6 +115,17 @@ def test_cut_after_ack_and_grace_then_reconcile_to_cut():
     assert st.ctl == SHUTDOWN  # not CUT until the group is seen off
     step(st, obs(battery=True, load=150, group=False, f=OFF, s=OFF), t + 150)
     assert st.ctl == CUT
+
+def test_group_back_on_after_an_unseen_cut_does_not_shut_servers_down_again():
+    """The card acknowledged the cut, then the UPS was unreadable while the
+    group came back on. The servers are booting on good power: leave them."""
+    st = State()
+    t = shut_down(st)
+    enter_cut(st)  # what the controller does when the SNMP write succeeds
+    assert jump(st, obs(f=BOOTING, s=BOOTING), t + 400) == []
+    assert st.ctl == IDLE
+    assert step(st, obs(), t + 2000) == []
+
 
 def test_cut_blocked_by_load_chassis_or_missing_calibration():
     """Design change 3: ping cannot tell OFF from BOOT; load and iDRAC can."""
@@ -299,12 +312,17 @@ def test_reserve_is_runtime_scaled_to_the_heaviest_load_seen():
     assert reserve_minutes(150, 150, 420) < 150 * 150 / 420
 
 
-def test_peak_counts_only_readings_with_every_server_up():
-    assert peak_sample(400, True, True) == 400
-    assert peak_sample(170, True, False) is None  # a server is off: standby draw
-    assert peak_sample(700, True, False) is None  # a server is booting: surge
-    assert peak_sample(150, False, False) is None  # group cut
-    assert peak_sample(0, True, True) is None  # a card reporting 0 W
+def test_peak_counts_only_readings_after_every_server_has_settled():
+    up = all_up_since(None, True, True, 1000)
+    assert up == 1000 and all_up_since(up, True, True, 1200) == 1000
+    assert all_up_since(up, True, False, 1200) is None  # a server off or booting
+    assert all_up_since(up, False, True, 1200) is None  # group cut
+    # A server answers before its boot is over: wait PEAK_SETTLE first.
+    assert peak_sample(700, up, 1000) is None
+    assert peak_sample(700, up, 1299) is None
+    assert peak_sample(400, up, 1300) == 400
+    assert peak_sample(170, None, 5000) is None  # a server off: standby draw
+    assert peak_sample(0, up, 1300) is None  # a card reporting 0 W
 
 
 def test_peak_only_rises_and_needs_two_eligible_readings_in_a_row():

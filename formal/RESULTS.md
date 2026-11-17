@@ -211,24 +211,32 @@ The Python simulator runs the production controller code against a UPS
 that reports runtime at the present load along a curve drawn at random per
 run (exponent 1.0 to 1.3), which the TLA+ model cannot express. Each
 server's draw wanders between 80 and 160 W while running and is 280 W while
-booting, 75 % above its running maximum. The card may return the group
-whenever its threshold is met. "True reserve" is in minutes with both
-servers at their running maximum. Rows are 1500 runs of 20 simulated hours
-unless noted.
+booting, 75 % above its running maximum, and a booting server answers on
+the network for up to the last two minutes of its boot. The card may return
+the group whenever its threshold is met. "True reserve" is in minutes with
+both servers at their running maximum. Rows are 1500 runs of 20 simulated
+hours unless noted.
 
 | Variant | Result |
 | --- | --- |
-| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 10,674 restores; the lowest true reserve at any restore was 25.6 min |
+| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 10,578 restores; the lowest true reserve at any restore was 23.1 min against a need of about 17 |
 | same, with humans and 30 % of commands failing (3000 runs) | **pass**. Lowest true reserve at a restore 21.5 min |
 | boot draw 200 W per server | pass |
-| boot draw 340 W per server (2.1 times the running maximum) | no hard cut, all recover. One run raised the shutdown alarm, after an HA restart followed by six minutes of unreadable UPS |
-| shed 6 min, card return 60 min | **hard cut**, as the model check `old_shed_6` predicts |
+| boot draw 340 W per server (2.1 times the running maximum) | pass. Lowest true reserve at a restore 21.4 min |
+| shed 6 min, card return 60 min | pass in this sample; the model check `old_shed_6` fails |
 | shed 3 min, card return 45 min | **hard cut** |
 | shed 3 min, card return 30 min (the card's old value) | **hard cut** |
 | restore gated on the UPS's raw runtime (the round 1 bug) | fails on the first run |
 | peak also counts boot and standby readings (the round 3 bug) | servers left off |
+| no settle time before readings count (the round 4 bug) | servers left off |
 | curve exponent 0.5 instead of 1.4 | **hard cut** |
 | load and iDRAC guard removed | **hard cut** of a booting server |
+
+The simulator also found one bug on its own. A run cut the group, the UPS
+then went unreadable, and the card switched the group back on before the
+controller ever saw it off. Still in SHUTDOWN, the controller shut the
+freshly booted servers down again on good power. The shutdown episode now
+ends when the card acknowledges the off command.
 
 ### What this leaves as an assumption
 

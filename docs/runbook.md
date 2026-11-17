@@ -17,14 +17,16 @@ Do these once, in order, when you can watch the servers.
    `false` before cutting over.
 3. **Install and configure** the integration (see the README). Leave it
    disarmed. `sensor.ups_sync_state` should read `idle` and its attributes
-   should show both servers reachable with `chassis_on: true`, and
-   `peak_load_w` should be filled in within 30 seconds. That is the
-   heaviest UPS load seen while both servers were up. The controller uses
-   it to turn the UPS's runtime figure into "runtime with the servers on".
-   It only ever rises. It is learned only while every server is up, so if
-   the integration is added while a server is off it stays empty, the
-   problem sensor stays on, and nothing is cut or restored until both
-   servers have been seen running.
+   should show both servers reachable with `chassis_on: true`. After both
+   have been up for five minutes, `peak_load_w` is filled in. That is the
+   heaviest UPS load seen while both servers were up and settled. The
+   controller uses it to turn the UPS's runtime figure into "runtime with
+   the servers on". It only ever rises.
+   If the integration is added while a server is off, `peak_load_w` stays
+   empty and the problem sensor stays on. Until both servers have been seen
+   running, nothing is power-cycled or restored. An outage still shuts the
+   servers down and cuts the group, and the group then stays off until you
+   turn it on by hand.
    To reset it (for example after a one-off heavy load on the UPS), remove
    the integration and add it again with both servers running.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
