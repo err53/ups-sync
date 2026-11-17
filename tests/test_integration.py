@@ -287,6 +287,16 @@ async def test_a_reboot_during_unreadable_ups_does_not_raise_the_peak(hass, rig)
     assert ctl.peak == 410.0
 
 
+async def test_a_reboot_during_a_stalled_loop_does_not_raise_the_peak(hass, rig):
+    """No read fails, but nothing polled for over two minutes."""
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
+    assert ctl.peak == 400.0
+    rig.now += 200
+    rig.set(load_w=830.0)
+    await rig.run(ctl, 285)
+    assert ctl.peak == 400.0
+
+
 async def test_stuck_servers_raise_problem(hass, rig):
     ctl = await setup(hass, rig, {"load_idle_max": 210})
     rig.reach = dict.fromkeys(rig.reach, False)
