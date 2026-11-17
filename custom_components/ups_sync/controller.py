@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from homeassistant.components import persistent_notification
+from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
@@ -49,12 +50,14 @@ class Controller:
         servers: list[Server],
         params: Params,
         notify_services: list[str],
+        grid_entities: list[str] | None = None,
     ) -> None:
         self.hass = hass
         self.ups = ups
         self.servers = {s.cfg.name: s for s in servers}
         self.params = params
         self.notify_services = notify_services
+        self.grid_entities = grid_entities or []
         self.state = State()
         self.obs: Obs | None = None
         self.armed = False
@@ -173,6 +176,27 @@ class Controller:
         "every server up and settled" stretch starts again."""
         self._up_since = self._prev_sample = self._prev_load = None
 
+    def _grid_down(self) -> bool:
+        """True when none of the configured grid entities shows life.
+
+        Each should be something that only works on grid power, such as a
+        wall charger's voltage sensor. One entity that is available, not
+        "off" and not zero is enough to call the grid up. With none
+        configured the feature is off.
+        """
+        if not self.grid_entities:
+            return False
+        return not any(self._shows_grid(e) for e in self.grid_entities)
+
+    def _shows_grid(self, entity_id: str) -> bool:
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF, ""):
+            return False
+        try:
+            return float(state.state) > 0
+        except ValueError:
+            return True
+
     async def _gather(self) -> Obs:
         ups: UpsReading
         ups, *probes = await asyncio.gather(
@@ -205,6 +229,7 @@ class Controller:
                 name: ServerObs(probes[i], probes[n + i])
                 for i, name in enumerate(self.servers)
             },
+            grid_down=self._grid_down(),
         )
 
     async def async_step(self, _now=None) -> None:

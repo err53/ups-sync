@@ -329,6 +329,80 @@ async def test_a_reboot_during_a_stalled_loop_does_not_raise_the_peak(hass, rig)
     assert ctl.peak == 400.0
 
 
+async def test_grid_entities_trigger_shutdown_and_hold_back_restore(hass, rig):
+    """The UPS stays online the whole time: an upstream battery is feeding it."""
+    hass.states.async_set("sensor.wall_voltage", "241.5")
+    hass.states.async_set("binary_sensor.grid_relay", "on")
+    ctl = await setup(
+        hass, rig,
+        {"load_idle_max": 210, "grid_entities": ["sensor.wall_voltage", "binary_sensor.grid_relay"]},
+    )
+    await ctl.async_set_flag("armed", True)
+    assert not ctl.obs.grid_down
+
+    hass.states.async_set("sensor.wall_voltage", "unavailable")
+    await rig.run(ctl, 600)
+    assert rig.calls == []  # one entity still shows life
+
+    hass.states.async_set("binary_sensor.grid_relay", "off")
+    await rig.run(ctl, 285)
+    assert rig.calls == [] and ctl.obs.grid_down
+    await rig.run(ctl, 30)
+    assert rig.calls == [("shutdown", "f"), ("shutdown", "s")]
+    assert "grid is down" in ctl.last_action
+
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    rig.set(load_w=170.0)
+    await rig.run(ctl, 150)
+    assert rig.calls[-1] == ("group", False)
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    await rig.run(ctl, 1800)
+    assert ("group", True) not in rig.calls  # UPS has input, grid is still down
+
+    hass.states.async_set("sensor.wall_voltage", "239.0")
+    await rig.run(ctl, 345)
+    assert ("group", True) not in rig.calls
+    await rig.run(ctl, 30)
+    assert rig.calls[-1] == ("group", True)
+
+
+@pytest.mark.parametrize(
+    ("state", "shows_grid"),
+    [("241.5", True), ("0", False), ("0.0", False), ("on", True), ("home", True),
+     ("off", False), ("unavailable", False), ("unknown", False), (None, False)],
+)
+async def test_what_counts_as_the_grid_being_up(hass, rig, state, shows_grid):
+    if state is not None:
+        hass.states.async_set("sensor.g", state)
+    ctl = await setup(hass, rig, {"grid_entities": ["sensor.g"]})
+    assert ctl.obs.grid_down is not shows_grid
+
+
+async def test_no_grid_entities_means_the_feature_is_off(hass, rig):
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
+    assert ctl.obs.grid_down is False
+
+
+async def test_options_form_offers_grid_entities(hass, rig):
+    await setup(hass, rig, {"load_idle_max": 210})
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    keys = {str(k) for k in form["data_schema"].schema}
+    assert {"grid_entities", "t_grid", "load_idle_max"} <= keys
+    hass.states.async_set("sensor.wall_voltage", "241")
+    result = await hass.config_entries.options.async_configure(
+        form["flow_id"],
+        {"load_idle_max": 210, "notify_services": "", "grid_entities": ["sensor.wall_voltage"],
+         "t_ob": 120, "t_grid": 300, "t_grace": 120, "t_dead": 600, "t_wake": 600,
+         "t_hold": 360, "t_wait": 1440, "e_restore": 26},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.runtime_data.grid_entities == ["sensor.wall_voltage"]
+    assert entry.runtime_data.params.t_grid == 300
+
+
 async def test_stuck_servers_raise_problem(hass, rig):
     ctl = await setup(hass, rig, {"load_idle_max": 210})
     rig.reach = dict.fromkeys(rig.reach, False)

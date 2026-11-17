@@ -8,6 +8,8 @@ from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -29,6 +31,7 @@ from .const import (
     OPT_LOAD_IDLE_MAX,
     OPT_NOTIFY,
     MIN_OPTION,
+    OPT_GRID,
     OPT_TIMINGS,
 )
 from .machine import Params
@@ -178,6 +181,9 @@ class UpsSyncOptionsFlow(OptionsFlow):
                 vol.Coerce(float), vol.Range(min=0)
             ),
             vol.Optional(OPT_NOTIFY, default=""): str,
+            vol.Optional(OPT_GRID, default=[]): EntitySelector(
+                EntitySelectorConfig(multiple=True)
+            ),
         }
         for key in OPT_TIMINGS:
             # A zero would act on a single reading; a small reserve is unsafe.

@@ -27,6 +27,23 @@ while another is up, that server is powered on through its iDRAC.
 Power is only ever cut when no server answers, no iDRAC reports power on,
 and the UPS output is at or below the calibrated idle load.
 
+### With a battery upstream of the UPS
+
+If the UPS is fed through a home battery, an outage does not put the UPS on
+battery until the home battery is empty, so by default the servers run it
+down. To shut them down early and keep that battery for everything else,
+give the integration one or more **grid entities** in its options: things
+that only work while the grid is up, such as a wall charger's voltage
+sensor. When none of them shows life for five minutes, the servers are shut
+down and their group is cut even though the UPS still has input, and the
+group is not restored until one shows life again.
+
+Pick entities that are reliably available. If all of them drop out for some
+other reason, the servers are shut down cleanly and come back when one
+returns; nothing is ever hard-cut on this signal. Turning on Maintenance
+disables this trigger, for when you want the servers to keep running on the
+home battery.
+
 ## Install
 
 1. In HACS, add `https://github.com/err53/ups-sync` as a custom repository

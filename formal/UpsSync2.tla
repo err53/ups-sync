@@ -18,6 +18,8 @@ CONSTANTS
   EMAX, DRAIN_HI, DRAIN_LO, CHARGE, DMAX, SMAX, NET_TAIL, BMAX,
   T_OB, T_GRACE, T_DEAD, T_WOL, T_WAIT, T_HOLD, E_RESTORE, E_SHED, E_LB, E_RETURN,
   T_SRV_OB, HA_CAN_FAIL, DIRECT_MON,
+  GS,          \* grid sensor: "off" | "true" | "any" (see UpsSync.tla)
+  T_GS,        \* ticks the grid sensor must read down before shutdown is started
   HUMAN        \* BOOLEAN: humans may power servers off/on while input is present
 
 VARIABLES
@@ -29,10 +31,11 @@ VARIABLES
   acked,                   \* function Servers -> BOOLEAN
   obT, darkT, waitT, holdT, deadT,
   wolT,                    \* ticks some (not all) servers unreachable with power on (persisted)
+  gs, gsT,                 \* grid sensor reading, and ticks it has read down
   crashed, timedOut, spurious
 
 vars == << grid, sw, dpu, e, g2, g2by, srv, srvT, net, manual, manTick, srvObT, p2prev, ha,
-           ctl, acked, obT, darkT, waitT, holdT, deadT, wolT, crashed, timedOut, spurious >>
+           ctl, acked, obT, darkT, waitT, holdT, deadT, wolT, gs, gsT, crashed, timedOut, spurious >>
 
 Syms == Permutations(Servers)
 
@@ -54,19 +57,26 @@ HaUp == ha = "UP"
 AllAcked == \A i \in Servers : acked[i]
 
 Reconcile == HaUp /\ ((ctl /= "CUT" /\ ~g2) \/ (ctl = "CUT" /\ g2))
-DoShut   == HaUp /\ ctl = "IDLE" /\ g2 /\ ((~ApcIn /\ obT >= T_OB) \/ LB)
+\* Optional grid sensor: something in Home Assistant that only works on grid
+\* power. GS = "off": not configured. "true": it always tells the truth.
+\* "any": it may be wrong in either direction at any time.
+GsDown == GS /= "off" /\ gs = "DOWN"
+GsChoices(g) == IF GS = "off" THEN {"UP"} ELSE IF GS = "true" THEN {g} ELSE {"UP", "DOWN"}
+
+DoShut   == HaUp /\ ctl = "IDLE" /\ g2
+            /\ ((~ApcIn /\ obT >= T_OB) \/ LB \/ (GsDown /\ gsT >= T_GS))
 DoRecov  == HaUp /\ ctl = "IDLE" /\ Power2 /\ ~AnyReach /\ ~LoadHigh /\ deadT >= T_DEAD
 InShut   == HaUp /\ (ctl = "SHUTDOWN" \/ DoShut) /\ g2
 HaCmd(i) == InShut /\ srv[i] = "RUN" /\ Reach(i)
 DoCutOk  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ ~AnyReach /\ ~LoadHigh
             /\ ((AllAcked /\ darkT >= T_GRACE) \/ darkT >= T_DEAD)
 DoCutTO  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ waitT >= T_WAIT /\ ~DoCutOk
-DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ holdT >= T_HOLD /\ e >= E_RESTORE
+DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ e >= E_RESTORE
 \* Partial outage leftover: some server is down while another is up. Cycling the group would
 \* hard-cut the running one, so wake the down one with Wake-on-LAN instead (harmless if it is
 \* already booting). Same runtime margin as a restore.
 Partial  == Power2 /\ AnyReach /\ \E i \in Servers : ~Reach(i)
-DoWol    == HaUp /\ ctl = "IDLE" /\ Partial /\ ApcIn /\ e >= E_RESTORE /\ wolT >= T_WOL
+DoWol    == HaUp /\ ctl = "IDLE" /\ Partial /\ ApcIn /\ ~GsDown /\ e >= E_RESTORE /\ wolT >= T_WOL
 
 SrvBackstop(i) == srv[i] = "RUN" /\ SrvSignal
                   /\ (LB \/ (T_SRV_OB > 0 /\ ~ApcIn /\ srvObT >= T_SRV_OB))
@@ -93,6 +103,7 @@ TypeOK ==
   /\ ctl \in {"IDLE", "SHUTDOWN", "CUT"}
   /\ obT \in 0..T_OB /\ darkT \in 0..T_DEAD /\ waitT \in 0..T_WAIT /\ holdT \in 0..T_HOLD /\ deadT \in 0..T_DEAD
   /\ wolT \in 0..T_WOL
+  /\ gs \in {"UP", "DOWN"} /\ gsT \in 0..T_GS
   /\ crashed \in BOOLEAN /\ timedOut \in BOOLEAN /\ spurious \in BOOLEAN
 
 Init ==
@@ -103,6 +114,7 @@ Init ==
   /\ acked = [i \in Servers |-> FALSE]
   /\ srvObT = 0 /\ p2prev = TRUE /\ ha = "UP" /\ ctl = "IDLE"
   /\ obT = 0 /\ darkT = 0 /\ waitT = 0 /\ holdT = 0 /\ deadT = 0 /\ wolT = 0
+  /\ gs = "UP" /\ gsT = 0
   /\ crashed = FALSE /\ timedOut = FALSE /\ spurious = FALSE
 
 DpuChoices(g) ==
@@ -116,7 +128,7 @@ HaChoices == IF HaUp /\ HA_CAN_FAIL THEN {"UP", "DOWN"} ELSE {"UP"}
 Next ==
   \E g \in {"UP", "DOWN"} : \E d \in DpuChoices(g) :
   \E mOff \in SUBSET OffCand : \E mOn \in SUBSET OnCand :
-  \E s \in {"GRID", "DPU"}, haNext \in HaChoices,
+  \E s \in {"GRID", "DPU"}, haNext \in HaChoices, gsN \in GsChoices(g),
      nmcRet \in (IF NmcMayReturn THEN BOOLEAN ELSE {FALSE}),
      shutLen \in [CmdSet(mOff) -> 1..SMAX],
      bootLen \in [OffSet -> 1..BMAX],
@@ -180,13 +192,15 @@ Next ==
     /\ obT'   = IF ~HaUp THEN 0 ELSE IF ~ApcIn THEN Sat(obT + 1, T_OB) ELSE 0
     /\ darkT' = IF ctlNext = "SHUTDOWN" /\ Power2 /\ ~AnyReach THEN Sat(darkT + 1, T_DEAD) ELSE 0
     /\ waitT' = IF ctlNext = "SHUTDOWN" THEN Sat(waitT + 1, T_WAIT) ELSE 0
-    /\ holdT' = IF ctlNext = "CUT" /\ ApcIn THEN Sat(holdT + 1, T_HOLD) ELSE 0
+    /\ holdT' = IF ctlNext = "CUT" /\ ApcIn /\ ~GsDown THEN Sat(holdT + 1, T_HOLD) ELSE 0
+    /\ gs' = gsN
+    /\ gsT' = IF ~HaUp THEN 0 ELSE IF GsDown THEN Sat(gsT + 1, T_GS) ELSE 0
     \* deadT is a persisted "last time a server answered" timestamp: it survives HA restarts
     /\ deadT' = IF g2Next /\ Power2 /\ ~AnyReach THEN Sat(deadT + 1, T_DEAD) ELSE 0
     /\ wolT'  = IF g2Next /\ Partial /\ ~DoWol THEN Sat(wolT + 1, T_WOL) ELSE 0
     /\ crashed'  = (crashed \/ \E i \in Servers : lostPow(i))
     /\ timedOut' = (timedOut \/ DoCutTO)
-    /\ spurious' = (spurious \/ (DoShut /\ ApcIn /\ ~LB))
+    /\ spurious' = (spurious \/ (DoShut /\ ApcIn /\ ~LB /\ ~GsDown))
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
@@ -199,7 +213,7 @@ Safety == NoHardCut /\ NoSpurious   \* NoTimeout checked separately with HUMAN =
 \* Once grid and HA are stable and the human stops acting, every server that was not
 \* deliberately powered off by a human is running.
 EventuallyRunning ==
-  (<>[](grid = "UP") /\ <>[](ha = "UP") /\ <>[](~manTick))
+  (<>[](grid = "UP") /\ <>[](ha = "UP") /\ <>[](gs = "UP") /\ <>[](~manTick))
     => <>[](\A i \in Servers : manual[i] \/ srv[i] = "RUN")
 
 =============================================================================

@@ -25,6 +25,7 @@ class Params:
     """Timings in seconds, runtime in minutes, load in watts."""
 
     t_ob: float = 120  # on battery this long -> start shutdown
+    t_grid: float = 300  # grid sensor down this long -> start shutdown
     t_grace: float = 120  # all acked and dark this long -> cut
     t_dead: float = 600  # dark without ack this long -> cut
     t_wake: float = 600  # one server down, one up this long -> wake it
@@ -53,12 +54,17 @@ class Obs:
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
+    # Optional grid sensor: True when the grid looks down even though the UPS
+    # may still have input (an upstream battery is carrying it). It can be
+    # wrong in either direction; nothing unsafe may follow from that.
+    grid_down: bool = False
 
 
 @dataclass
 class State:
     ctl: str = IDLE
     ob_since: float | None = None
+    grid_since: float | None = None
     hold_since: float | None = None
     dark_since: float | None = None  # SHUTDOWN only
     partial_since: float | None = None
@@ -198,7 +204,7 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     """Reconcile to the observed group state and advance the timers."""
     if st.last_obs is not None and mono - st.last_obs > MAX_GAP:
         # Nobody was watching. Nothing has "held" across the gap.
-        st.ob_since = st.hold_since = st.dark_since = None
+        st.ob_since = st.grid_since = st.hold_since = st.dark_since = None
         st.partial_since = st.seen_dark_since = None
     st.last_obs = mono
 
@@ -212,7 +218,13 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     dark = obs.group_on and all_dark(obs)
     some_down = any(not s.reachable for s in obs.servers.values())
     st.ob_since = _since(obs.on_battery, st.ob_since, mono)
-    st.hold_since = _since(obs.input_present and st.ctl != IDLE, st.hold_since, mono)
+    st.grid_since = _since(obs.grid_down, st.grid_since, mono)
+    # "Power is back" means UPS input from the grid, not from a battery upstream.
+    st.hold_since = _since(
+        obs.input_present and not obs.grid_down and st.ctl != IDLE,
+        st.hold_since,
+        mono,
+    )
     st.seen_dark_since = _since(dark, st.seen_dark_since, mono)
     st.dark_since = _since(st.ctl == SHUTDOWN and dark, st.dark_since, mono)
     st.partial_since = _since(
@@ -228,16 +240,33 @@ def decide(
     acts: list[Action] = []
 
     if st.ctl == IDLE:
-        # DoShut
+        # DoShut. The grid-sensor trigger saves the upstream battery for the
+        # loads that must stay up. It is an economy, not a safety rule, so
+        # maintenance turns it off; the on-battery triggers always apply.
+        # It also waits until a restore could be approved (peak load known):
+        # an economy must not turn the servers off for good.
+        on_grid_loss = (
+            not maintenance
+            and obs.reserve_min is not None
+            and _held(st.grid_since, mono, p.t_grid)
+        )
         if obs.group_on and (
-            obs.low_battery or (obs.on_battery and _held(st.ob_since, mono, p.t_ob))
+            obs.low_battery
+            or (obs.on_battery and _held(st.ob_since, mono, p.t_ob))
+            or on_grid_loss
         ):
             st.ctl = SHUTDOWN
             st.shutdown_since = mono
             st.acked.clear()
             st.last_cmd.clear()
             st.dark_since = _since(all_dark(obs), None, mono)
-            why = "low battery" if obs.low_battery else "on battery"
+            why = (
+                "low battery"
+                if obs.low_battery
+                else "on battery"
+                if obs.on_battery
+                else "grid is down, saving the upstream battery"
+            )
             return _shutdown_cmds(st, obs, mono, p, why)
         if maintenance:
             return acts
@@ -256,6 +285,7 @@ def decide(
         if (
             _held(st.partial_since, mono, p.t_wake)
             and obs.input_present
+            and not obs.grid_down
             and _enough_reserve(obs, p)
         ):
             for name, s in obs.servers.items():
@@ -291,7 +321,7 @@ def decide(
         not maintenance
         and not obs.group_on
         and obs.input_present
-        and _held(st.hold_since, mono, p.t_hold)
+        and _held(st.hold_since, mono, p.t_hold)  # counts only with the grid up
         and _enough_reserve(obs, p)
     ):
         return [Action("restore", reason="input stable")]

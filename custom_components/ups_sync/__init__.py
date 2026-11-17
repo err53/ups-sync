@@ -15,6 +15,7 @@ from .const import (
     CONF_READ_COMMUNITY,
     CONF_SERVERS,
     CONF_WRITE_COMMUNITY,
+    OPT_GRID,
     OPT_LOAD_IDLE_MAX,
     OPT_NOTIFY,
     OPT_TIMINGS,
@@ -60,7 +61,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
         s.strip() for s in entry.options.get(OPT_NOTIFY, "").split(",") if "." in s
     ]
     ctl = Controller(
-        hass, entry.entry_id, ups, servers, params_from_options(entry.options), notify
+        hass,
+        entry.entry_id,
+        ups,
+        servers,
+        params_from_options(entry.options),
+        notify,
+        list(entry.options.get(OPT_GRID, [])),
     )
     await ctl.async_load()
     entry.runtime_data = ctl

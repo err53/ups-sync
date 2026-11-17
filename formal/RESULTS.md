@@ -249,3 +249,52 @@ Today it is about 37 to 40 % (145 to 160 W of 390 to 410 W), which puts
 the figure at 17 to 19 minutes. The margin is thin. If group 1's load drops, or a server is
 added, re-check it. A full UPS death needs an outage long enough to drain
 the UPS with the servers already off, about two to three hours.
+
+## Grid sensor (added 2026-11-17)
+
+The controller can now be given a grid sensor: Home Assistant entities that
+only work on grid power. When it reads down for `T_GS`, the servers are shut
+down and cut although the APC still has input (the DPU is carrying it), and
+the group is not restored, nor a server woken, until it reads up again.
+
+In the models this is a constant `GS`:
+
+| `GS` | Meaning |
+| --- | --- |
+| `"off"` | no sensor; the model is the one checked above |
+| `"true"` | the sensor always equals the real grid state |
+| `"any"` | the sensor may read up or down at any tick, whatever the grid does |
+
+`"any"` is the honest model of a device that can drop off the network for
+its own reasons. The properties are unchanged, except that `NoSpurious` now
+allows a shutdown that starts while the sensor reads down, and
+`EventuallyRunning` additionally assumes the sensor eventually reads up.
+
+| Config | Sensor | Checks | Result |
+| --- | --- | --- | --- |
+| `MC_Baseline.cfg` (single server) | `"any"` | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 1,336,530 distinct states, 113.5 M generated, 12 min 46 s |
+| `MC2_NoHuman_safety.cfg` (two servers) | `"true"` | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 2,085,760 distinct states, 145.0 M generated, depth 56, 26 min 56 s |
+| `MC2_NoHuman_gs_sim.cfg` (two servers) | `"any"` | same, `-simulate -depth 300`, 20 min | GS_SIM_RESULT |
+| `MC2_NoHuman_safety.cfg` with `GS = "any"` (two servers, exhaustive) | `"any"` | same | GS_ANY_RESULT |
+| `MC2_NoHuman_live.cfg` (two servers) | `"off"` | `EventuallyRunning` | GS_LIVE_RESULT |
+
+Two-server liveness with the sensor on was not run exhaustively: the state
+space is several times the 2.56 M of the sensor-off run. Liveness with an
+adversarial sensor is covered by the single-server model and the simulator.
+
+### Simulator
+
+`tests/test_sim.py` has a sensor that flips at random, unrelated to the UPS
+input, so it is wrong much of the time in both directions.
+
+| Variant (3000 runs of 20 simulated hours each) | Result |
+| --- | --- |
+| random sensor | no hard cut, every run recovers, nothing restored while the sensor read down. Four runs raised the shutdown alarm; each had two long unreadable-UPS stretches in a row during a shutdown |
+| random sensor, humans and 30 % of commands failing | pass |
+| hold timer ignores the sensor (mutation) | caught on the first run: restored while the sensor read down |
+
+The simulator found one bug in the first version of this change. A sensor
+that read down in the first minutes after set-up, before any peak load was
+known, shut the servers down and cut the group, and no restore could then be
+approved. The grid trigger now waits until a peak load is known. A real
+outage is not held back by that.

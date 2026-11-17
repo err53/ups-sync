@@ -63,9 +63,14 @@ class HardCut(AssertionError):
 
 
 class World:
-    def __init__(self, seed: int, humans: bool, cmd_fail: float) -> None:
+    def __init__(
+        self, seed: int, humans: bool, cmd_fail: float, sensor: bool = False
+    ) -> None:
         self.r = random.Random(seed)
         self.humans, self.cmd_fail = humans, cmd_fail
+        # Optional grid sensor. It flips at random, unrelated to the UPS
+        # input, so it is often wrong in both directions.
+        self.sensor, self.grid_down, self.grid_until = sensor, False, 0
         self.t = 0
         self.e = E_MAX
         self.input = True
@@ -141,6 +146,7 @@ class World:
             load_w=load_w,
             group_on=self.group,
             servers=servers,
+            grid_down=self.sensor and self.grid_down,
         )
 
     # ---- server state changes --------------------------------------------
@@ -179,7 +185,8 @@ class World:
         for act in decide(self.st, o, self.t, self.t, P, False):
             failed = self.r.random() < self.cmd_fail
             if act.kind == "shutdown":
-                assert o.on_battery or self.st.shutdown_since != self.t, "spurious"
+                started_now = self.st.shutdown_since == self.t
+                assert o.on_battery or o.grid_down or not started_now, "spurious"
                 if not failed:
                     self.st.acked.add(act.server)
                     if self.srv[act.server] in ("RUN", "BOOT"):  # it answered
@@ -190,6 +197,7 @@ class World:
                 enter_cut(self.st)
             elif act.kind == "restore" and not failed:
                 assert o.reserve_min >= P.e_restore
+                assert not o.grid_down, "restored while the grid sensor read down"
                 self.restores.append(self.e)
                 self.set_group(True, "ha")
             elif act.kind == "wake" and not failed:
@@ -210,6 +218,11 @@ class World:
                     r.randint(1800, 14400) if long else r.randint(15, 900)
                 )
                 self.power_edge(was)
+            if self.sensor and self.t >= self.grid_until:
+                self.grid_down = not self.grid_down
+                self.grid_until = self.t + (
+                    r.randint(60, 10800) if self.grid_down else r.randint(60, 14400)
+                )
             if r.random() < 1 / 1500:
                 self.ha_down_until = self.t + r.randint(30, 900)
                 self.st = State(dead_since=self.st.dead_since)  # restart
@@ -282,12 +295,19 @@ class World:
         self.t += DT
 
 
-def run(seed: int, humans: bool = False, cmd_fail: float = 0.0, hours: int = 16) -> World:
-    w = World(seed, humans, cmd_fail)
+def run(
+    seed: int,
+    humans: bool = False,
+    cmd_fail: float = 0.0,
+    hours: int = 16,
+    sensor: bool = False,
+) -> World:
+    w = World(seed, humans, cmd_fail, sensor)
     while w.t < hours * 3600:
         w.step()
     # Settle: power and HA stay up, nobody interferes.
     w.settling = True
+    w.grid_down = False
     was = w.powered()
     w.input = True
     w.power_edge(was)
@@ -312,3 +332,14 @@ def test_no_hard_cut_with_humans_and_failing_commands(seed):
     w = run(seed, humans=True, cmd_fail=0.3)
     assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
     assert w.group
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_no_hard_cut_with_a_grid_sensor_that_is_often_wrong(seed):
+    """The sensor says "grid down" and "grid up" at random. Servers may be shut
+    down more than needed, but never cut while running, and they come back."""
+    w = run(seed, sensor=True)
+    assert all(s == "RUN" for s in w.srv.values()), w.srv
+    assert w.st.ctl == IDLE and w.group
+    w = run(seed, humans=True, cmd_fail=0.3, sensor=True)
+    assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
