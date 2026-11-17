@@ -17,6 +17,7 @@ from .const import DOMAIN, STALE_SECONDS
 from .machine import (
     CUT,
     IDLE,
+    MAX_GAP,
     SHUTDOWN,
     Action,
     Obs,
@@ -167,6 +168,11 @@ class Controller:
 
     # ---- main loop -------------------------------------------------------
 
+    def _forget_settling(self) -> None:
+        """A reading was missed. A server may have rebooted unseen, so the
+        "every server up and settled" stretch starts again."""
+        self._up_since = self._prev_sample = self._prev_load = None
+
     async def _gather(self) -> Obs:
         ups: UpsReading
         ups, *probes = await asyncio.gather(
@@ -176,6 +182,8 @@ class Controller:
         )
         n = len(self.servers)
         mono = time.monotonic()
+        if self.last_ok is not None and mono - self.last_ok > MAX_GAP:
+            self._forget_settling()  # a stalled loop counts as a missed reading
         self._up_since = all_up_since(
             self._up_since, ups.group_on, all(probes[:n]), mono
         )
@@ -212,6 +220,7 @@ class Controller:
                 # turns on once the reading is STALE_SECONDS old.
                 self.last_error = f"UPS: {exc}"
                 _LOGGER.warning("UPS read failed: %s", exc)
+                self._forget_settling()
                 self._notify_listeners()
                 return
             self.obs = obs

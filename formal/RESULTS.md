@@ -219,7 +219,7 @@ hours unless noted.
 
 | Variant | Result |
 | --- | --- |
-| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 10,578 restores; the lowest true reserve at any restore was 23.1 min against a need of about 17 |
+| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 10,572 restores; the lowest true reserve at any restore was 21.8 min against a need of about 17 |
 | same, with humans and 30 % of commands failing (3000 runs) | **pass**. Lowest true reserve at a restore 21.5 min |
 | boot draw 200 W per server | pass |
 | boot draw 340 W per server (2.1 times the running maximum) | pass. Lowest true reserve at a restore 21.4 min |

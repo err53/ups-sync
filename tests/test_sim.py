@@ -219,7 +219,9 @@ class World:
 
         if not self.settling and r.random() < 1 / 800:
             self.blind_until = self.t + r.randint(15, 420)  # UPS unreadable
-        if self.t >= self.ha_down_until and self.t >= self.blind_until:
+        if self.t < self.blind_until:  # a missed reading, as in the controller
+            self.up_since = self.prev_sample = self.prev_load = None
+        elif self.t >= self.ha_down_until:
             self.controller()
 
         # Server NUT backstops, polling the card directly.

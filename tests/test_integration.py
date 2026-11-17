@@ -175,6 +175,9 @@ async def test_armed_full_cycle(hass, rig):
     rig.set(load_w=170.0)
     await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", False)
+    # The card acknowledged the command: the shutdown is over, even though
+    # the group has not been seen off yet.
+    assert ctl.state.ctl == "cut" and ctl.obs.group_on
 
     # The group is off, so the UPS reports a long runtime: 90 min at 150 W.
     # At the 400 W the servers were seen to draw that is only 23 min.
@@ -268,6 +271,20 @@ async def test_peak_load_ignores_standby_and_boot_readings(hass, rig):
     rig.set(load_w=400.0)
     await rig.run(ctl, 45)
     assert ctl.peak == 400.0 and ctl.calibrated
+
+
+async def test_a_reboot_during_unreadable_ups_does_not_raise_the_peak(hass, rig):
+    ctl = await setup(hass, rig, {"load_idle_max": 210})
+    assert ctl.peak == 400.0
+    rig.read_error = "timeout"  # servers reboot while nobody can see
+    await rig.run(ctl, 60)
+    rig.read_error = None
+    rig.set(load_w=830.0)  # both answer again, still booting
+    await rig.run(ctl, 285)
+    assert ctl.peak == 400.0
+    rig.set(load_w=410.0)
+    await rig.run(ctl, 60)
+    assert ctl.peak == 410.0
 
 
 async def test_stuck_servers_raise_problem(hass, rig):

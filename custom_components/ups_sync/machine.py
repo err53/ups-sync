@@ -5,9 +5,9 @@ in comments (DoShut, DoCutOk, DoRecov, DoRest, DoWol, Reconcile) refer to
 formal/UpsSync2.tla.
 
 Two rules keep it honest:
-* The controller state is only ever moved to CUT or back to IDLE by observing
-  the outlet group (Reconcile). Decisions emit actions; they never assume the
-  action worked.
+* The controller state moves to CUT when the card acknowledges the off
+  command or the group is seen off, and back to IDLE only when the group is
+  seen on. Nothing else is assumed to have worked.
 * Every cut passes cut_guard().
 """
 
