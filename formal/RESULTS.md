@@ -176,7 +176,7 @@ a load shed, leaving the restore to the controller, which waits for
 | --- | --- | --- |
 | `MC_Baseline.cfg` (single server) | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 299,970 distinct states, 12.1 M generated, depth 58 |
 | `MC2_NoHuman_safety.cfg` (two servers) | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 1,503,720 distinct states, 98.4 M generated, depth 56, 17 min 22 s |
-| `MC2_NoHuman_live.cfg` (two servers) | `EventuallyRunning` | re-run in progress when this was written |
+| `MC2_NoHuman_live.cfg` (two servers) | `EventuallyRunning` | **PASS**, 2,564,360 distinct states, 161.6 M generated, depth 58, 44 min 30 s |
 | `MC2_Human_sim.cfg` | random simulation with humans, `-simulate -depth 300`, 15 min on 3 workers | **No violation** in 20.4 M states checked |
 
 Single-server safety across the card's return threshold (each about 290 k
@@ -210,20 +210,23 @@ last term is `BMAX + SMAX`, so 20 and 17.
 The Python simulator runs the production controller code against a UPS
 that reports runtime at the present load along a curve drawn at random per
 run (exponent 1.0 to 1.3), which the TLA+ model cannot express. Each
-server's draw wanders between 80 and 160 W while running and is 175 W while
-booting, more than the controller has ever seen it draw. The card may
-return the group whenever its threshold is met. Rows are 1500 runs of 20
-simulated hours unless noted.
+server's draw wanders between 80 and 160 W while running and is 280 W while
+booting, 75 % above its running maximum. The card may return the group
+whenever its threshold is met. "True reserve" is in minutes with both
+servers at their running maximum. Rows are 1500 runs of 20 simulated hours
+unless noted.
 
 | Variant | Result |
 | --- | --- |
-| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 11,038 restores; the lowest true reserve at any restore was 23.1 min against a need of about 17 |
-| same, with humans and 30 % of commands failing (3000 runs) | **pass**. Lowest true reserve at a restore 21.1 min |
-| shed 6 min, card return 60 min | pass in this sample; the model check `old_shed_6` fails |
-| shed 3 min, card return 45 min | pass in this sample |
+| chosen settings: shed 3 min, card return 60 min (3000 runs) | **pass**. 10,674 restores; the lowest true reserve at any restore was 25.6 min |
+| same, with humans and 30 % of commands failing (3000 runs) | **pass**. Lowest true reserve at a restore 21.5 min |
+| boot draw 200 W per server | pass |
+| boot draw 340 W per server (2.1 times the running maximum) | no hard cut, all recover. One run raised the shutdown alarm, after an HA restart followed by six minutes of unreadable UPS |
+| shed 6 min, card return 60 min | **hard cut**, as the model check `old_shed_6` predicts |
+| shed 3 min, card return 45 min | **hard cut** |
 | shed 3 min, card return 30 min (the card's old value) | **hard cut** |
 | restore gated on the UPS's raw runtime (the round 1 bug) | fails on the first run |
-| peak load replaced by a moving average of recent load (the round 2 bug) | **hard cut**; restores with as little as 5.5 min of true reserve |
+| peak also counts boot and standby readings (the round 3 bug) | servers left off |
 | curve exponent 0.5 instead of 1.4 | **hard cut** |
 | load and iDRAC guard removed | **hard cut** of a booting server |
 

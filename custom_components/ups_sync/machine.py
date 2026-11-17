@@ -49,7 +49,7 @@ class Obs:
     on_battery: bool
     low_battery: bool
     runtime_min: float  # the UPS's estimate at its PRESENT load; display only
-    reserve_min: float | None  # runtime at the heaviest load seen; None = unknown
+    reserve_min: float | None  # runtime with every server running; None = unknown
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
@@ -98,29 +98,40 @@ def cut_guard(obs: Obs, p: Params) -> bool:
 MAX_GAP = 120
 
 # The UPS reports runtime at its PRESENT load. With the servers off that is
-# several times what it will be once they boot, so it cannot gate a restore.
-# reserve = runtime x (load now / heaviest load seen) ^ CURVE is the runtime
-# at the heaviest load. Lead-acid runtime falls faster than load rises;
-# APC's own tables for this UPS give exponents of 1.2 to 1.36, so 1.4 never
-# overstates. The peak only ever goes up.
+# several times what it will be once they run, so it cannot gate a restore.
+# reserve = runtime x (load now / peak) ^ CURVE is the runtime at the peak:
+# the heaviest load seen while every server was up and running. That is the
+# model's unit, "minutes with every server running". Lead-acid runtime falls
+# faster than load rises; APC's own tables for this UPS give exponents of
+# 1.2 to 1.36, so 1.4 never overstates. The peak only ever goes up.
+#
+# Readings taken while a server is off, booting or shutting down are left
+# out on purpose. Standby draw would understate the peak (restore too
+# early). A boot surge would overstate it for good (never restore).
+# e_restore leaves room for a boot that draws up to about twice as much.
 CURVE = 1.4
 
 
+def peak_sample(load_w: float, group_on: bool, all_up: bool) -> float | None:
+    """This reading, if it may count towards the peak."""
+    return load_w if group_on and all_up and load_w > 0 else None
+
+
 def update_peak(
-    peak: float | None, prev_load: float | None, load_w: float, group_on: bool
+    peak: float | None, prev_sample: float | None, sample: float | None
 ) -> float | None:
-    """Heaviest UPS load seen with the group on. Two readings in a row must
-    agree, so one odd sample cannot raise it."""
-    if not group_on or prev_load is None:
+    """Two eligible readings in a row must agree, so one odd sample cannot
+    raise the peak."""
+    if prev_sample is None or sample is None:
         return peak
-    return max(peak or 0.0, min(prev_load, load_w))
+    return max(peak or 0.0, min(prev_sample, sample))
 
 
 def reserve_minutes(
     runtime_min: float, load_w: float, peak: float | None
 ) -> float | None:
-    """Minutes the UPS would last at the heaviest load seen. None = unknown."""
-    if peak is None:
+    """Minutes the UPS would last at the peak load. None = unknown."""
+    if not peak:
         return None
     return runtime_min * min(1.0, load_w / peak) ** CURVE
 
@@ -209,8 +220,11 @@ def decide(
             return acts
         # DoRecov. dead_since survives restarts and may be stale, so this
         # process must also have watched the darkness itself for t_grace.
+        # No peak load yet means a restore could never be approved: leave
+        # the outlets live so a person can simply power the servers on.
         if (
             cut_guard(obs, p)
+            and obs.reserve_min is not None
             and _held(st.dead_since, wall, p.t_dead)
             and _held(st.seen_dark_since, mono, p.t_grace)
         ):

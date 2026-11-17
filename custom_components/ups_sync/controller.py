@@ -25,6 +25,7 @@ from .machine import (
     State,
     cut_guard,
     decide,
+    peak_sample,
     observe,
     reserve_minutes,
     stuck,
@@ -59,7 +60,8 @@ class Controller:
         self.last_action = ""
         self.last_ok: float | None = None
         self.last_error = ""
-        self.peak: float | None = None  # heaviest UPS load seen with the group on
+        self.peak: float | None = None  # heaviest load seen with every server up
+        self._prev_sample: float | None = None
         self._prev_load: float | None = None
         self._wanted_group: bool | None = None
         self.group_cmd_failed = False
@@ -81,7 +83,7 @@ class Controller:
         self.state.dead_since = data.get("dead_since")
         if self.state.dead_since is not None and self.state.dead_since > time.time():
             self.state.dead_since = None  # the clock stepped backwards
-        self.peak = data.get("peak")
+        self.peak = data.get("peak") or None
         self._saved = self._snapshot()
 
     def _snapshot(self) -> dict:
@@ -170,14 +172,18 @@ class Controller:
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
-        self.peak = update_peak(self.peak, self._prev_load, ups.load_w, ups.group_on)
+        sample = peak_sample(ups.load_w, ups.group_on, all(probes[:n]))
+        self.peak = update_peak(self.peak, self._prev_sample, sample)
+        self._prev_sample = sample
+        # The lower of the last two loads, in case the runtime figure lags.
+        load_for_reserve = min(self._prev_load or ups.load_w, ups.load_w)
         self._prev_load = ups.load_w
         return Obs(
             input_present=ups.input_present,
             on_battery=ups.on_battery,
             low_battery=ups.low_battery,
             runtime_min=ups.runtime_min,
-            reserve_min=reserve_minutes(ups.runtime_min, ups.load_w, self.peak),
+            reserve_min=reserve_minutes(ups.runtime_min, load_for_reserve, self.peak),
             load_w=ups.load_w,
             group_on=ups.group_on,
             servers={

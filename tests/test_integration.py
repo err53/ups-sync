@@ -103,6 +103,7 @@ async def setup(hass, options=None):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    await entry.runtime_data.async_step()  # a second reading: the peak load is known
     return entry.runtime_data
 
 
@@ -159,7 +160,7 @@ async def test_armed_full_cycle(hass, rig):
 
     rig.set(input_present=False, on_battery=True)
     await rig.run(ctl, 105)
-    assert rig.calls == [] and ctl.calibrated
+    assert rig.calls == [] and ctl.calibrated and ctl.peak == 400.0
     await rig.run(ctl, 30)
     assert rig.calls == [("shutdown", "f"), ("shutdown", "s")]
     assert hass.states.get("sensor.ups_sync_state").state == "shutdown"
@@ -248,6 +249,22 @@ async def test_peak_load_is_not_learned_while_the_group_is_off(hass, rig):
     await rig.run(ctl, 900)
     assert ctl.peak is None and ctl.obs.reserve_min is None
     assert rig.calls == [] and not ctl.calibrated and ctl.problem
+
+
+async def test_peak_load_ignores_standby_and_boot_readings(hass, rig):
+    """Group on but a server off or booting: neither 170 W nor 700 W counts."""
+    rig.reach["10.0.0.13"] = False
+    rig.set(load_w=170.0)
+    ctl = await setup(hass, {"load_idle_max": 210})
+    await rig.run(ctl, 60)
+    assert ctl.peak is None and not ctl.calibrated
+    rig.set(load_w=700.0)  # booting
+    await rig.run(ctl, 60)
+    assert ctl.peak is None
+    rig.reach["10.0.0.13"] = True
+    rig.set(load_w=400.0)
+    await rig.run(ctl, 30)
+    assert ctl.peak == 400.0 and ctl.calibrated
 
 
 async def test_stuck_servers_raise_problem(hass, rig):

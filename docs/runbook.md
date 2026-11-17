@@ -19,12 +19,14 @@ Do these once, in order, when you can watch the servers.
    disarmed. `sensor.ups_sync_state` should read `idle` and its attributes
    should show both servers reachable with `chassis_on: true`, and
    `peak_load_w` should be filled in within 30 seconds. That is the
-   heaviest UPS load seen with the servers powered. The controller uses it
-   to turn the UPS's runtime figure into "runtime with the servers on". It
-   only ever rises, and steps 4 and 5 raise it to the boot-time draw.
-   If the integration is ever added while the group is off, it cannot learn
-   this and will not restore: turn the group on by hand once the battery is
-   above half.
+   heaviest UPS load seen while both servers were up. The controller uses
+   it to turn the UPS's runtime figure into "runtime with the servers on".
+   It only ever rises. It is learned only while every server is up, so if
+   the integration is added while a server is off it stays empty, the
+   problem sensor stays on, and nothing is cut or restored until both
+   servers have been seen running.
+   To reset it (for example after a one-off heavy load on the UPS), remove
+   the integration and add it again with both servers running.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
    and leave them plugged in. Wait two minutes, read `load_w` from the state
    sensor's attributes, add 40, and enter that as the idle load in the
@@ -50,7 +52,9 @@ Do these once, in order, when you can watch the servers.
 9. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
    both servers off within 8 more, group cut about 2 min after the last one
    goes quiet. Restore input. Expect the group back on 6 min later, provided
-   the battery is above about half, and both servers booting on their own.
+   the battery is above roughly 55 to 60 %, and both servers booting on
+   their own. The state sensor's `reserve_min` attribute must read 26 or
+   more for the restore to happen.
    This is the first time either shutdown channel is used for real.
 10. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
     and confirm both servers shut themselves down after 10 minutes on
@@ -60,7 +64,7 @@ Do these once, in order, when you can watch the servers.
 ## During an outage
 
 - Do nothing. Do not press power buttons while the UPS is on battery.
-- Do not power a server on while the battery is under half charge. Let the
+- Do not power a server on while the battery is under about 60 % charge. Let the
   controller do it. The runtime the UPS shows with the servers off is
   several times what it will be once they are running.
 - With the transfer switch on grid, moving it to the battery within two

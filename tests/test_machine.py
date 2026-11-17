@@ -10,6 +10,7 @@ from custom_components.ups_sync.machine import (
     State,
     decide,
     observe,
+    peak_sample,
     reserve_minutes,
     stuck,
     update_peak,
@@ -298,14 +299,38 @@ def test_reserve_is_runtime_scaled_to_the_heaviest_load_seen():
     assert reserve_minutes(150, 150, 420) < 150 * 150 / 420
 
 
-def test_peak_only_rises_needs_two_readings_and_ignores_a_cut_group():
-    assert update_peak(None, None, 400, True) is None  # one reading is not enough
-    assert update_peak(None, 400, 410, True) == 400
-    assert update_peak(400, 410, 900, True) == 410  # a single spike is not believed
-    assert update_peak(410, 900, 905, True) == 900  # a sustained one is
-    assert update_peak(900, 300, 300, True) == 900  # never falls
-    assert update_peak(None, 150, 150, False) is None  # group off: not a full load
-    assert update_peak(420, 150, 150, False) == 420
+def test_peak_counts_only_readings_with_every_server_up():
+    assert peak_sample(400, True, True) == 400
+    assert peak_sample(170, True, False) is None  # a server is off: standby draw
+    assert peak_sample(700, True, False) is None  # a server is booting: surge
+    assert peak_sample(150, False, False) is None  # group cut
+    assert peak_sample(0, True, True) is None  # a card reporting 0 W
+
+
+def test_peak_only_rises_and_needs_two_eligible_readings_in_a_row():
+    assert update_peak(None, None, 400) is None  # one reading is not enough
+    assert update_peak(None, 400, 410) == 400
+    assert update_peak(400, 410, 900) == 410  # a single spike is not believed
+    assert update_peak(410, 900, 905) == 900  # a sustained one is
+    assert update_peak(900, 300, 300) == 900  # never falls
+    assert update_peak(400, 400, None) == 400 and update_peak(None, None, None) is None
+    assert reserve_minutes(57, 150, 0) is None  # a stored zero is "unknown"
+
+
+def test_no_power_cycle_before_a_restore_could_ever_be_approved():
+    """Set up while the servers are off: leave the outlets live."""
+    dead = obs(load=170, f=OFF, s=OFF, reserve=None)
+    st = State()
+    assert step(st, dead, 0) == []
+    assert step(st, dead, 900) == []
+    assert st.ctl == IDLE and stuck(st, dead, 900, 900, P) is False
+    # An outage shutdown is never held back by this.
+    st = State()
+    t = shut_down(st)
+    jump(st, obs(battery=True, load=170, f=OFF, s=OFF, reserve=None), t + 15)
+    assert kinds(
+        step(st, obs(battery=True, load=170, f=OFF, s=OFF, reserve=None), t + 135)
+    ) == [("cut", None)]
 
 
 def test_dead_timer_survives_restart_and_resets_on_any_answer():

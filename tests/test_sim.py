@@ -33,20 +33,21 @@ from custom_components.ups_sync.machine import (
     cut_guard,
     decide,
     observe,
+    peak_sample,
     reserve_minutes,
     update_peak,
 )
 
 DT = 15
-# Energy `e` is minutes of runtime with both servers running.
+# Energy `e` is minutes of runtime with both servers running flat out.
 # Card settings, in minutes of runtime at the present load: low battery 16,
 # shed 3, min return 60 (the most the card accepts).
 E_MAX, E_LB, E_SHED, CARD_RETURN = 57.0, 16.0, 3.0, 60.0
 # A running server draws anywhere from RUN_MIN_W to RUN_MAX_W and wanders.
-# Booting draws more than the controller may ever have seen it draw.
+# Booting draws far more than the controller ever counts towards its peak.
 BASE_W, STANDBY_W = 150, 10
-RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 175
-FULL_W = BASE_W + 2 * BOOT_W
+RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 280
+FULL_W = BASE_W + 2 * RUN_MAX_W
 NOISE_W = 15
 P = Params(load_idle_max=BASE_W + 2 * STANDBY_W + 40)
 assert BASE_W + STANDBY_W + RUN_MIN_W - NOISE_W > P.load_idle_max  # guard can tell
@@ -68,6 +69,7 @@ class World:
         self.group, self.off_by = True, "ha"  # ha | shed | dead
         self.curve = self.r.uniform(1.0, 1.3)  # Peukert-like exponent
         self.peak: float | None = None
+        self.prev_sample: float | None = None
         self.prev_load: float | None = None
         self.watts = {n: self.r.uniform(RUN_MIN_W, RUN_MAX_W) for n in NAMES}
         self.blind_until = 0
@@ -115,14 +117,18 @@ class World:
             idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
             servers[n] = ServerObs(reach, idrac)
         load_w = self.load() + self.r.uniform(-NOISE_W, NOISE_W)
-        self.peak = update_peak(self.peak, self.prev_load, load_w, self.group)
+        all_up = all(s.reachable for s in servers.values())
+        sample = peak_sample(load_w, self.group, all_up)
+        self.peak = update_peak(self.peak, self.prev_sample, sample)
+        self.prev_sample = sample
+        reserve_load = min(self.prev_load or load_w, load_w)
         self.prev_load = load_w
         return Obs(
             input_present=self.input,
             on_battery=not self.input,
             low_battery=not self.input and self.card_runtime() < E_LB,
             runtime_min=self.card_runtime(),
-            reserve_min=reserve_minutes(self.card_runtime(), load_w, self.peak),
+            reserve_min=reserve_minutes(self.card_runtime(), reserve_load, self.peak),
             load_w=load_w,
             group_on=self.group,
             servers=servers,
