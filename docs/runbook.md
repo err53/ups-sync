@@ -89,6 +89,10 @@ Do these once, in order, when you can watch the servers.
   sensor: `waiting_for_grid: true` means no grid entity is showing the
   grid up yet, and `grid_entities_missing` lists any that no integration
   is providing (renamed, deleted, or not loaded yet).
+- If `grid_entities_missing` is ever non-empty for more than a few minutes
+  after Home Assistant starts, fix or remove that entity before the next
+  outage. While no grid entity can show the grid up, the group is not
+  restored after an outage.
 - **Without grid entities:** with the transfer switch on grid, moving it to
   the battery within two minutes of the outage avoids a shutdown. Later
   than that, the shutdown runs to the end and the servers come back once
