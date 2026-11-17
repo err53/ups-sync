@@ -275,8 +275,8 @@ allows a shutdown that starts while the sensor reads down, and
 | `MC_Baseline.cfg` (single server) | `"any"` | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 1,336,530 distinct states, 113.5 M generated, 12 min 46 s |
 | `MC2_NoHuman_safety.cfg` (two servers) | `"true"` | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 2,085,760 distinct states, 145.0 M generated, depth 56, 26 min 56 s |
 | `MC2_NoHuman_gs_sim.cfg` (two servers) | `"any"` | same, `-simulate -depth 300`, 20 min | **No violation** in 49.3 M states checked |
-| `MC2_NoHuman_safety.cfg` with `GS = "any"` (two servers, exhaustive) | `"any"` | same | run in progress when this was written |
-| `MC2_NoHuman_live.cfg` (two servers) | `"off"` | `EventuallyRunning` | run in progress when this was written |
+| `MC2_NoHuman_safety.cfg` with `GS = "any"` (two servers, exhaustive) | `"any"` | same | **Not completed.** Stopped at the 2 h job limit after 4,844,360 distinct states (623.7 M generated) to depth 24, with no violation found and the queue still growing |
+| `MC2_NoHuman_live.cfg` (two servers) | `"off"` | `EventuallyRunning` | **PASS**, 2,564,360 distinct states, 161.6 M generated, depth 56, 43 min 46 s. The same state count as before the sensor was added, so the edited model with the sensor off is the model checked earlier |
 
 Two-server liveness with the sensor on was not run exhaustively: the state
 space is several times the 2.56 M of the sensor-off run. Liveness with an
