@@ -7,6 +7,11 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
 from .const import (
     CONF_ADD_ANOTHER,
@@ -30,12 +35,36 @@ from .machine import Params
 from .servers import Server, ServerConfig
 from .snmp import ApcClient, UpsError, make_engine
 
+
+
+class _WholeNumber(NumberSelector):
+    """A typed number box that only accepts whole numbers and returns an int.
+
+    A bare range renders as a slider with no value shown. The selector's
+    step is only a hint to the browser, so 2.5 is refused here rather than
+    silently becoming group 2.
+    """
+
+    def __init__(self, low: int, high: int) -> None:
+        super().__init__(
+            NumberSelectorConfig(
+                min=low, max=high, step=1, mode=NumberSelectorMode.BOX
+            )
+        )
+
+    def __call__(self, data) -> int:
+        value = super().__call__(data)
+        if value != int(value):
+            raise vol.Invalid("must be a whole number")
+        return int(value)
+
+
 UPS_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_READ_COMMUNITY, default="public"): str,
         vol.Required(CONF_WRITE_COMMUNITY, default="private"): str,
-        vol.Required(CONF_GROUP, default=2): vol.All(int, vol.Range(min=1, max=16)),
+        vol.Required(CONF_GROUP, default=2): _WholeNumber(1, 16),
     }
 )
 
@@ -43,9 +72,7 @@ SERVER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME): str,
         vol.Required(CONF_HOST): str,
-        vol.Required(CONF_REACH_PORT, default=22): vol.All(
-            int, vol.Range(min=1, max=65535)
-        ),
+        vol.Required(CONF_REACH_PORT, default=22): _WholeNumber(1, 65535),
         vol.Optional(CONF_IDRAC_HOST): str,
         vol.Optional(CONF_IDRAC_USER): str,
         vol.Optional(CONF_IDRAC_PASSWORD): str,

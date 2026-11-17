@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ups_sync.const import DOMAIN
@@ -124,6 +124,28 @@ async def test_config_flow_creates_entry(hass, rig):
     await hass.async_block_till_done()
     assert hass.states.get("sensor.ups_sync_state").state == "idle"
     assert hass.states.get("switch.ups_sync_armed").state == "off"
+
+
+async def test_config_flow_numbers_are_typed_boxes_and_stored_as_integers(hass, rig):
+    """A bare range renders as a slider that shows no value."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    box = result["data_schema"].schema["group"]
+    assert box.config["mode"] == "box" and (box.config["min"], box.config["max"]) == (1, 16)
+    for bad in (2.5, 0, 17):  # 2.5 must not quietly become group 2
+        with pytest.raises(InvalidData):
+            await hass.config_entries.flow.async_configure(result["flow_id"], {**UPS, "group": bad})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {**UPS, "group": 3.0})
+    assert result["data_schema"].schema["reach_port"].config["mode"] == "box"
+    with pytest.raises(InvalidData):
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"], {**SERVERS[0], "reach_port": 443.9, "add_another": False}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**SERVERS[0], "reach_port": 443.0, "add_another": False}
+    )
+    assert result["title"] == "UPS 10.0.0.4 group 3"
+    group, reach = result["data"]["group"], result["data"]["servers"][0]["reach_port"]
+    assert (group, reach) == (3, 443) and type(group) is int and type(reach) is int
 
 
 async def test_config_flow_errors(hass, rig):
