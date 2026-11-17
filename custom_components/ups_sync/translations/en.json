@@ -41,11 +41,13 @@
     "step": {
       "init": {
         "title": "UPS sync settings",
-        "description": "Times are in seconds. The controller never cuts power until the idle load is set.",
+        "description": "Times are in seconds. The controller never cuts power until the idle load is set.\n\nGrid entities are for a UPS fed by a battery upstream. Pick things that only work while the grid is up, such as a wall charger's voltage sensor. When none of them shows life, the servers are shut down and their group is cut even though the UPS still has input, and they are not restored until one shows life again. Leave empty to act only when the UPS itself is on battery.",
         "data": {
           "load_idle_max": "UPS output (W) at or below which the servers are certainly off",
           "notify_services": "Notify services, comma separated (for example notify.mobile_app_phone)",
+          "grid_entities": "Entities that only work on grid power (optional)",
           "t_ob": "On battery this long before shutdown starts",
+          "t_grid": "Grid down this long (by the entities above) before shutdown starts",
           "t_grace": "Wait after the last server goes quiet before cutting",
           "t_dead": "Wait before cutting when servers went off on their own",
           "t_wake": "Wait before powering on a server that is off while another is up",

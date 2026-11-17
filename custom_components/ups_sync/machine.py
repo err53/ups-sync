@@ -25,6 +25,7 @@ class Params:
     """Timings in seconds, runtime in minutes, load in watts."""
 
     t_ob: float = 120  # on battery this long -> start shutdown
+    t_grid: float = 300  # grid sensor down this long -> start shutdown
     t_grace: float = 120  # all acked and dark this long -> cut
     t_dead: float = 600  # dark without ack this long -> cut
     t_wake: float = 600  # one server down, one up this long -> wake it
@@ -53,12 +54,23 @@ class Obs:
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
+    # Optional grid sensor, for a UPS that still has input during an outage
+    # because a battery upstream is carrying it. It can be wrong in either
+    # direction; nothing unsafe may follow from that. Two separate facts,
+    # because the sensor may also say nothing at all:
+    #   grid_down  there is evidence the grid is down  -> may start a shutdown
+    #   grid_ok    there is evidence the grid is up     -> may restore or wake
+    # With no sensor configured: grid_down False, grid_ok True.
+    grid_down: bool = False
+    grid_ok: bool = True
 
 
 @dataclass
 class State:
     ctl: str = IDLE
     ob_since: float | None = None
+    grid_since: float | None = None
+    no_grid_since: float | None = None  # CUT, UPS has input, grid not confirmed
     hold_since: float | None = None
     dark_since: float | None = None  # SHUTDOWN only
     partial_since: float | None = None
@@ -158,7 +170,10 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
     """Servers are off and the controller cannot bring them back.
 
     Idle: every server silent for t_dead, yet the guard refuses the cycle.
-    Cut: input has been stable for hours and the reserve still falls short.
+    Cut: for hours the UPS has had input, yet no restore: the reserve still
+    falls short, or the grid sensor has not confirmed the grid in all that
+    time. The second may be a real long outage or a sensor that has stopped
+    working; either way a person should know.
     """
     if st.ctl == IDLE:
         return (
@@ -167,7 +182,10 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
             and _held(st.dead_since, wall, p.t_dead)
             and not cut_guard(obs, p)
         )
-    return st.ctl == CUT and _held(st.hold_since, mono, RESTORE_OVERDUE)
+    return st.ctl == CUT and (
+        _held(st.hold_since, mono, RESTORE_OVERDUE)
+        or _held(st.no_grid_since, mono, RESTORE_OVERDUE)
+    )
 
 
 def _since(cond: bool, since: float | None, now: float) -> float | None:
@@ -198,7 +216,8 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     """Reconcile to the observed group state and advance the timers."""
     if st.last_obs is not None and mono - st.last_obs > MAX_GAP:
         # Nobody was watching. Nothing has "held" across the gap.
-        st.ob_since = st.hold_since = st.dark_since = None
+        st.ob_since = st.grid_since = st.hold_since = st.dark_since = None
+        st.no_grid_since = None
         st.partial_since = st.seen_dark_since = None
     st.last_obs = mono
 
@@ -212,7 +231,16 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     dark = obs.group_on and all_dark(obs)
     some_down = any(not s.reachable for s in obs.servers.values())
     st.ob_since = _since(obs.on_battery, st.ob_since, mono)
-    st.hold_since = _since(obs.input_present and st.ctl != IDLE, st.hold_since, mono)
+    st.grid_since = _since(obs.grid_down, st.grid_since, mono)
+    # "Power is back" means UPS input from the grid, not from a battery upstream.
+    st.hold_since = _since(
+        obs.input_present and obs.grid_ok and st.ctl != IDLE, st.hold_since, mono
+    )
+    st.no_grid_since = _since(
+        st.ctl == CUT and obs.input_present and not obs.grid_ok,
+        st.no_grid_since,
+        mono,
+    )
     st.seen_dark_since = _since(dark, st.seen_dark_since, mono)
     st.dark_since = _since(st.ctl == SHUTDOWN and dark, st.dark_since, mono)
     st.partial_since = _since(
@@ -228,16 +256,32 @@ def decide(
     acts: list[Action] = []
 
     if st.ctl == IDLE:
-        # DoShut
-        if obs.group_on and (
-            obs.low_battery or (obs.on_battery and _held(st.ob_since, mono, p.t_ob))
-        ):
+        # DoShut. The grid-sensor trigger saves the upstream battery for the
+        # loads that must stay up. It is an economy, not a safety rule, so
+        # maintenance turns it off; the on-battery triggers always apply.
+        # It also waits until the cut and the restore that follow could be
+        # approved (idle load set, peak load known): an economy must not
+        # turn the servers off for good.
+        on_battery = obs.on_battery and _held(st.ob_since, mono, p.t_ob)
+        on_grid_loss = (
+            not maintenance
+            and p.load_idle_max is not None
+            and obs.reserve_min is not None
+            and _held(st.grid_since, mono, p.t_grid)
+        )
+        if obs.group_on and (obs.low_battery or on_battery or on_grid_loss):
             st.ctl = SHUTDOWN
             st.shutdown_since = mono
             st.acked.clear()
             st.last_cmd.clear()
             st.dark_since = _since(all_dark(obs), None, mono)
-            why = "low battery" if obs.low_battery else "on battery"
+            why = (
+                "low battery"
+                if obs.low_battery
+                else "on battery"
+                if on_battery
+                else "grid is down, saving the upstream battery"
+            )
             return _shutdown_cmds(st, obs, mono, p, why)
         if maintenance:
             return acts
@@ -256,6 +300,7 @@ def decide(
         if (
             _held(st.partial_since, mono, p.t_wake)
             and obs.input_present
+            and obs.grid_ok
             and _enough_reserve(obs, p)
         ):
             for name, s in obs.servers.items():
@@ -291,7 +336,7 @@ def decide(
         not maintenance
         and not obs.group_on
         and obs.input_present
-        and _held(st.hold_since, mono, p.t_hold)
+        and _held(st.hold_since, mono, p.t_hold)  # counts only with the grid up
         and _enough_reserve(obs, p)
     ):
         return [Action("restore", reason="input stable")]

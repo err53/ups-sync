@@ -10,6 +10,12 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from homeassistant.components import persistent_notification
+from homeassistant.const import (
+    ATTR_RESTORED,
+    STATE_OFF,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
@@ -49,12 +55,15 @@ class Controller:
         servers: list[Server],
         params: Params,
         notify_services: list[str],
+        grid_entities: list[str] | None = None,
     ) -> None:
         self.hass = hass
         self.ups = ups
         self.servers = {s.cfg.name: s for s in servers}
         self.params = params
         self.notify_services = notify_services
+        self.grid_entities = grid_entities or []
+        self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
         self.armed = False
@@ -110,7 +119,7 @@ class Controller:
             if name == "maintenance" and not value:
                 # Whatever was done by hand must be watched afresh.
                 self.state.dead_since = self.state.seen_dark_since = None
-                self.state.partial_since = None
+                self.state.partial_since = self.state.grid_since = None
             await self._save_if_changed()
         self._notify_listeners()
 
@@ -136,6 +145,8 @@ class Controller:
             or self.stuck
             or self.group_cmd_failed
             or not self.calibrated
+            # At startup other integrations may simply not have loaded yet.
+            or (bool(self.grid_missing) and self.hass.is_running)
         )
 
     @property
@@ -155,6 +166,10 @@ class Controller:
             "ups_stale": self.stale,
             "calibrated": self.calibrated,
             "stuck_servers_off": self.stuck,
+            "waiting_for_grid": bool(
+                self.obs and not self.obs.grid_ok and self.state.ctl == CUT
+            ),
+            "grid_entities_missing": self.grid_missing,
             "group_command_failed": self.group_cmd_failed,
             "peak_load_w": self.peak,
             "acked": sorted(self.state.acked),
@@ -172,6 +187,44 @@ class Controller:
         """A reading was missed. A server may have rebooted unseen, so the
         "every server up and settled" stretch starts again."""
         self._up_since = self._prev_sample = self._prev_load = None
+
+    def _grid(self) -> tuple[bool, bool]:
+        """(grid_down, grid_ok) from the configured grid entities.
+
+        Each should be something that only works on grid power, such as a
+        wall charger's voltage sensor. One entity that is available, not
+        "off" and not zero is evidence the grid is up. Evidence that it is
+        down needs every entity an integration is actually providing to
+        show no life. With none configured the feature is off.
+
+        An entity that no integration is providing says nothing: one Home
+        Assistant does not know at all (renamed, deleted), or one it only
+        remembers from before a restart. For the latter it writes a
+        placeholder "unavailable" state marked `restored` until the owning
+        integration has loaded. Saying nothing can neither start a shutdown
+        nor allow a restore. Such entities are listed in
+        `grid_entities_missing` and raise the problem sensor.
+        """
+        if not self.grid_entities:
+            self.grid_missing = []
+            return False, True
+        states = [self.hass.states.get(e) for e in self.grid_entities]
+        live = [s is not None and not s.attributes.get(ATTR_RESTORED) for s in states]
+        self.grid_missing = [
+            e for e, ok in zip(self.grid_entities, live, strict=True) if not ok
+        ]
+        known = [s for s, ok in zip(states, live, strict=True) if ok]
+        up = any(self._shows_grid(s.state) for s in known)
+        return bool(known) and not up, up
+
+    @staticmethod
+    def _shows_grid(state: str) -> bool:
+        if state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF, ""):
+            return False
+        try:
+            return float(state) > 0
+        except ValueError:
+            return True
 
     async def _gather(self) -> Obs:
         ups: UpsReading
@@ -192,6 +245,7 @@ class Controller:
         self._prev_sample = sample
         # The lower of the last two loads, in case the runtime figure lags.
         load_for_reserve = min(self._prev_load or ups.load_w, ups.load_w)
+        grid_down, grid_ok = self._grid()
         self._prev_load = ups.load_w
         return Obs(
             input_present=ups.input_present,
@@ -205,6 +259,8 @@ class Controller:
                 name: ServerObs(probes[i], probes[n + i])
                 for i, name in enumerate(self.servers)
             },
+            grid_down=grid_down,
+            grid_ok=grid_ok,
         )
 
     async def async_step(self, _now=None) -> None:

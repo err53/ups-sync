@@ -48,17 +48,25 @@ Do these once, in order, when you can watch the servers.
    for each server after two minutes. Nothing should happen. Restore input.
 7. **Cut over.** `UPS_HOST=... TRUENAS_HOST=... TRUENAS_ADMIN=user:pass
    scripts/cutover.sh apply`. This moves the card to runtime-based load shed
-   and points TrueNAS at the card. Do this and step 8 together: the old
+   and points TrueNAS at the card. Do this and step 9 together: the old
    card settings cut power 150 s into an outage, which is mid-shutdown.
-8. **Arm.** Turn on `switch.ups_sync_armed`.
-9. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
+8. **Choose the grid entities** (only if a home battery feeds the UPS and
+   the servers should not run it down). In the integration's options, pick
+   one or more entities that only work on grid power. Here that is
+   `sensor.tesla_wall_connector_grid_voltage`, which had no gaps in two
+   weeks of history. Check `grid_down: false` in the state sensor's
+   attributes afterwards. With the transfer switch on the home battery and
+   the controller still disarmed, switch the charger's breaker off for six
+   minutes: `would_act` should list a shutdown for each server.
+9. **Arm.** Turn on `switch.ups_sync_armed`.
+10. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
    both servers off within 8 more, group cut about 2 min after the last one
    goes quiet. Restore input. Expect the group back on 6 min later, provided
    the battery is above roughly 55 to 60 %, and both servers booting on
    their own. The state sensor's `reserve_min` attribute must read 26 or
    more for the restore to happen.
    This is the first time either shutdown channel is used for real.
-10. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
+11. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
     and confirm both servers shut themselves down after 10 minutes on
     battery. Restore input and start Home Assistant. Within about 10 minutes
     it power-cycles the group and the servers boot.
@@ -69,10 +77,27 @@ Do these once, in order, when you can watch the servers.
 - Do not power a server on while the battery is under about 60 % charge. Let the
   controller do it. The runtime the UPS shows with the servers off is
   several times what it will be once they are running.
-- With the transfer switch on grid, moving it to the battery within two
-  minutes of the outage avoids a shutdown. Later than that, the shutdown
-  runs to the end and the servers come back about 20 minutes after input
-  returns.
+- **With grid entities configured:** five minutes after the grid goes, the
+  servers shut down and their group is cut, whichever way the transfer
+  switch is set. They stay off until the grid is back and has been stable
+  for six minutes. Moving the switch to the home battery does not bring
+  them back. To run them on the home battery anyway, turn on Maintenance
+  and switch the group on yourself. Turning Maintenance off again while
+  the grid is still out starts the five minutes afresh, then shuts them
+  down.
+  If the servers stay off after the grid is back, look at the state
+  sensor: `waiting_for_grid: true` means no grid entity is showing the
+  grid up yet, and `grid_entities_missing` lists any that no integration
+  is providing (renamed, deleted, or not loaded yet).
+- If `grid_entities_missing` is ever non-empty for more than a few minutes
+  after Home Assistant starts, fix or remove that entity before the next
+  outage. While no grid entity can show the grid up, the group is not
+  restored after an outage.
+- **Without grid entities:** with the transfer switch on grid, moving it to
+  the battery within two minutes of the outage avoids a shutdown. Later
+  than that, the shutdown runs to the end and the servers come back once
+  the UPS has had input for six minutes, even if that input is the home
+  battery.
 
 ## Maintenance
 

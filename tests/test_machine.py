@@ -24,7 +24,9 @@ OFF = ServerObs(False, False)
 BOOTING = ServerObs(False, True)
 
 
-def obs(battery=False, low=False, reserve=57, load=400, group=True, f=UP, s=UP):
+def obs(
+    battery=False, low=False, reserve=57, load=400, group=True, f=UP, s=UP, grid=True
+):
     return Obs(
         input_present=not battery,
         on_battery=battery,
@@ -34,6 +36,8 @@ def obs(battery=False, low=False, reserve=57, load=400, group=True, f=UP, s=UP):
         load_w=load,
         group_on=group,
         servers={"f": f, "s": s},
+        grid_down=grid is False,
+        grid_ok=grid is True,
     )
 
 
@@ -379,6 +383,146 @@ def test_wake_only_the_server_that_is_off():
     st = State()
     step(st, partial, 0)
     assert step(st, partial, 600, maintenance=True) == []
+
+
+# ---- grid sensor: the UPS still has input, but from a battery upstream ----
+
+
+def test_grid_down_for_t_grid_shuts_down_while_the_ups_is_still_online():
+    st = State()
+    assert step(st, obs(grid=False), 0) == []
+    assert step(st, obs(grid=False), 299) == []
+    acts = step(st, obs(grid=False), 300)
+    assert kinds(acts) == [("shutdown", "f"), ("shutdown", "s")]
+    assert "grid is down" in acts[0].reason and st.ctl == SHUTDOWN
+
+
+def test_no_grid_shutdown_before_a_restore_could_ever_be_approved():
+    """Just installed: no peak load yet. Saving the battery can wait."""
+    st = State()
+    assert step(st, obs(grid=False, reserve=None), 0) == []
+    assert step(st, obs(grid=False, reserve=None), 900) == []
+    assert st.ctl == IDLE
+    # Nor before the idle load is set: the cut could never be approved, and
+    # the servers would sit shut down on live outlets.
+    uncalibrated = Params(load_idle_max=None)
+    st = State()
+    assert step(st, obs(grid=False), 0, uncalibrated) == []
+    assert step(st, obs(grid=False), 900, uncalibrated) == []
+    assert st.ctl == IDLE
+    st = State()
+    # A real outage is never held back by this.
+    step(st, obs(grid=False, reserve=None, battery=True), 915)
+    assert kinds(step(st, obs(grid=False, reserve=None, battery=True), 1035)) == [
+        ("shutdown", "f"),
+        ("shutdown", "s"),
+    ]
+
+
+def test_reason_names_the_trigger_that_actually_fired():
+    """On battery for a moment, but it is the grid timer that expired."""
+    st = State()
+    step(st, obs(grid=False), 0)
+    step(st, obs(grid=False), 270)
+    acts = step(st, obs(grid=False, battery=True), 300)
+    assert "grid is down" in acts[0].reason
+
+
+def test_stuck_when_the_grid_sensor_keeps_the_group_off_for_hours():
+    st = State(ctl=CUT)
+    held = obs(group=False, f=OFF, s=OFF, load=150, grid=False)
+    assert step(st, held, 0) == []
+    step(st, held, 6 * 3600 - 30)
+    assert not stuck(st, held, 6 * 3600 - 30, 0, P)
+    step(st, held, 6 * 3600)
+    assert stuck(st, held, 6 * 3600, 0, P)
+    # With the UPS itself on battery it is simply an outage, not "stuck".
+    dark = obs(group=False, f=OFF, s=OFF, load=150, grid=False, battery=True)
+    step(st, dark, 6 * 3600 + 15)
+    assert not stuck(st, dark, 6 * 3600 + 15, 0, P)
+
+
+def test_a_silent_grid_sensor_neither_shuts_down_nor_restores():
+    """grid=None: no entity is being provided, so there is no evidence."""
+    st = State()
+    assert step(st, obs(grid=None), 0) == []
+    assert step(st, obs(grid=None), 3600) == []
+    assert st.ctl == IDLE
+
+    st = State(ctl=CUT)
+    off = dict(group=False, f=OFF, s=OFF, load=150)
+    assert step(st, obs(grid=None, **off), 0) == []
+    assert step(st, obs(grid=None, **off), 3600) == []  # input present, grid unconfirmed
+    assert not stuck(st, obs(grid=None, **off), 3600, 0, P)
+    step(st, obs(grid=None, **off), 6 * 3600)
+    assert stuck(st, obs(grid=None, **off), 6 * 3600, 0, P)
+    assert step(st, obs(**off), 6 * 3600 + 375) == []  # six minutes of grid first
+    assert kinds(step(st, obs(**off), 6 * 3600 + 405)) == [("restore", None)]
+
+    st = State()
+    assert [a for a in step(st, obs(f=OFF, s=UP, load=300, grid=None), 0)] == []
+    assert step(st, obs(f=OFF, s=UP, load=300, grid=None), 900) == []  # no wake
+
+
+def test_grid_timer_does_not_count_unwatched_time():
+    st = State()
+    jump(st, obs(grid=False), 0)
+    assert jump(st, obs(grid=False), 400) == []  # nobody watched in between
+    assert step(st, obs(grid=False), 699) == []
+    assert kinds(step(st, obs(grid=False), 700)) == [("shutdown", "f"), ("shutdown", "s")]
+
+
+def test_grid_blip_or_flapping_sensor_does_not_shut_down():
+    st = State()
+    step(st, obs(grid=False), 0)
+    assert step(st, obs(grid=False), 280) == []
+    assert step(st, obs(), 290) == []  # one reading with the grid up
+    assert step(st, obs(grid=False), 580) == []  # timer started again
+    assert st.ctl == IDLE
+
+
+def test_no_restore_and_no_wake_while_the_grid_is_down():
+    """The UPS has input from the upstream battery; that is not "power is back"."""
+    st = State(ctl=CUT)
+    off = dict(group=False, f=OFF, s=OFF, load=150)
+    assert step(st, obs(grid=False, **off), 0) == []
+    assert step(st, obs(grid=False, **off), 4000) == []
+    # Grid returns: the hold starts now, not when the UPS first had input.
+    assert step(st, obs(**off), 4015 + 345) == []
+    assert kinds(step(st, obs(**off), 4015 + 375)) == [("restore", None)]
+
+    # With a grid delay longer than the wake delay, wake would come first.
+    slow = Params(load_idle_max=210, t_grid=10**6)
+    st = State()
+    assert step(st, obs(f=OFF, s=UP, load=300, grid=False), 0, slow) == []
+    assert step(st, obs(f=OFF, s=UP, load=300, grid=False), 900, slow) == []
+    assert kinds(step(st, obs(f=OFF, s=UP, load=300), 915, slow)) == [("wake", "f")]
+
+
+def test_grid_trigger_then_full_cycle():
+    st = State()
+    step(st, obs(grid=False), 0)
+    step(st, obs(grid=False), 300)
+    st.acked |= {"f", "s"}
+    dark = obs(grid=False, load=170, f=OFF, s=OFF)
+    jump(st, dark, 315)
+    assert kinds(step(st, dark, 435)) == [("cut", None)]
+    enter_cut(st)
+    cut = obs(grid=False, group=False, f=OFF, s=OFF, load=150)
+    assert step(st, cut, 3000) == []  # stays off for as long as the grid is out
+    back = obs(group=False, f=OFF, s=OFF, load=150)
+    assert kinds(step(st, back, 3400)) == [("restore", None)]
+
+
+def test_maintenance_turns_the_grid_trigger_off_but_not_the_battery_one():
+    st = State()
+    step(st, obs(grid=False), 0, maintenance=True)
+    assert step(st, obs(grid=False), 900, maintenance=True) == []
+    step(st, obs(grid=False, battery=True), 915, maintenance=True)
+    assert kinds(step(st, obs(grid=False, battery=True), 1035, maintenance=True)) == [
+        ("shutdown", "f"),
+        ("shutdown", "s"),
+    ]
 
 
 def test_maintenance_still_shuts_down_on_outage():

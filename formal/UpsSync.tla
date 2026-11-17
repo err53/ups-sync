@@ -39,7 +39,9 @@ CONSTANTS
   E_RETURN,    \* NMC min return runtime for auto power-on of group 2
   T_SRV_OB,    \* server backstop: shut down after this many ticks on battery (0 = off)
   HA_CAN_FAIL, \* BOOLEAN: HA may crash/reboot at any time
-  DIRECT_MON   \* BOOLEAN: servers watch the NMC directly (TRUE) or via HA's upsd (FALSE)
+  DIRECT_MON,  \* BOOLEAN: servers watch the NMC directly (TRUE) or via HA's upsd (FALSE)
+  GS,          \* grid sensor: "off" | "true" | "any"
+  T_GS         \* controller: ticks the grid sensor must read down before shutdown is started
 
 VARIABLES
   grid,     \* "UP" | "DOWN"
@@ -61,12 +63,14 @@ VARIABLES
   waitT,    \* controller ticks in SHUTDOWN
   holdT,    \* controller ticks input stable (in CUT)
   deadT,    \* ticks servers dark with power on (persisted across HA restarts)
+  gs,       \* "UP" | "DOWN"  what the grid sensor reads
+  gsT,      \* controller ticks the grid sensor has read down
   crashed,  \* BOOLEAN  a server lost power while RUN/SHUT/BOOT  (safety)
   timedOut, \* BOOLEAN  controller hit T_WAIT                    (safety)
   spurious  \* BOOLEAN  shutdown started without outage evidence  (safety)
 
 vars == << grid, sw, dpu, e, g2, g2by, srv, srvT, net, srvObT, p2prev, ha,
-           ctl, acked, obT, darkT, waitT, holdT, deadT, crashed, timedOut, spurious >>
+           ctl, acked, obT, darkT, waitT, holdT, deadT, gs, gsT, crashed, timedOut, spurious >>
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -86,18 +90,25 @@ SrvSignal == UpsOut /\ (DIRECT_MON \/ ha = "UP")   \* server can see UPS status
 
 HaUp == ha = "UP"
 
+\* Optional grid sensor: something in Home Assistant that only works on grid
+\* power. GS = "off": not configured. "true": it always tells the truth.
+\* "any": it may be wrong in either direction at any time.
+GsDown == GS /= "off" /\ gs = "DOWN"
+GsChoices(g) == IF GS = "off" THEN {"UP"} ELSE IF GS = "true" THEN {g} ELSE {"UP", "DOWN"}
+
 (* Controller decisions, from observables only *)
 \* Reconciliation: the controller's state is anchored to the observable group 2 state.
 \* Group off while IDLE/SHUTDOWN (e.g. after an HA reboot) -> CUT.  Group on while CUT -> IDLE.
 Reconcile == HaUp /\ ((ctl /= "CUT" /\ ~g2) \/ (ctl = "CUT" /\ g2))
-DoShut   == HaUp /\ ctl = "IDLE" /\ g2 /\ ((~ApcIn /\ obT >= T_OB) \/ LB)
+DoShut   == HaUp /\ ctl = "IDLE" /\ g2
+            /\ ((~ApcIn /\ obT >= T_OB) \/ LB \/ (GsDown /\ gsT >= T_GS))
 DoRecov  == HaUp /\ ctl = "IDLE" /\ Power2 /\ ~Reach /\ ~LoadHigh /\ deadT >= T_DEAD
 InShut   == HaUp /\ (ctl = "SHUTDOWN" \/ DoShut) /\ g2
 HaCmd    == InShut /\ srv = "RUN" /\ Reach          \* ssh poweroff succeeds this tick
 DoCutOk  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ ~Reach /\ ~LoadHigh
             /\ ((acked /\ darkT >= T_GRACE) \/ darkT >= T_DEAD)
 DoCutTO  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ waitT >= T_WAIT /\ ~DoCutOk
-DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ holdT >= T_HOLD /\ e >= E_RESTORE
+DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ e >= E_RESTORE
 
 (* Server backstop (its own NUT client) *)
 SrvBackstop == srv = "RUN" /\ SrvSignal
@@ -131,6 +142,7 @@ TypeOK ==
   /\ waitT \in 0..T_WAIT
   /\ holdT \in 0..T_HOLD
   /\ deadT \in 0..T_DEAD
+  /\ gs \in {"UP", "DOWN"} /\ gsT \in 0..T_GS
   /\ crashed \in BOOLEAN /\ timedOut \in BOOLEAN /\ spurious \in BOOLEAN
 
 Init ==
@@ -144,6 +156,7 @@ Init ==
   /\ ha = "UP"
   /\ ctl = "IDLE" /\ acked = FALSE
   /\ obT = 0 /\ darkT = 0 /\ waitT = 0 /\ holdT = 0 /\ deadT = 0
+  /\ gs = "UP" /\ gsT = 0
   /\ crashed = FALSE /\ timedOut = FALSE /\ spurious = FALSE
 
 -----------------------------------------------------------------------------
@@ -160,6 +173,7 @@ HaChoices == IF HaUp /\ HA_CAN_FAIL THEN {"UP", "DOWN"} ELSE {"UP"}   \* crash i
 Next ==
   \E g \in {"UP", "DOWN"} : \E d \in DpuChoices(g) :
   \E s \in {"GRID", "DPU"},
+     gsN \in GsChoices(g),
      haNext \in HaChoices,
      shutLen \in (IF CmdOff THEN 1..SMAX ELSE {0}),
      bootLen \in 1..BMAX,
@@ -224,12 +238,14 @@ Next ==
     /\ obT'   = IF ~HaUp THEN 0 ELSE IF ~ApcIn THEN Sat(obT + 1, T_OB) ELSE 0
     /\ darkT' = IF ctlNext = "SHUTDOWN" /\ Power2 /\ ~Reach THEN Sat(darkT + 1, T_DEAD) ELSE 0
     /\ waitT' = IF ctlNext = "SHUTDOWN" THEN Sat(waitT + 1, T_WAIT) ELSE 0
-    /\ holdT' = IF ctlNext = "CUT" /\ ApcIn THEN Sat(holdT + 1, T_HOLD) ELSE 0
+    /\ holdT' = IF ctlNext = "CUT" /\ ApcIn /\ ~GsDown THEN Sat(holdT + 1, T_HOLD) ELSE 0
+    /\ gs' = gsN
+    /\ gsT' = IF ~HaUp THEN 0 ELSE IF GsDown THEN Sat(gsT + 1, T_GS) ELSE 0
     \* deadT is a persisted "last time a server answered" timestamp: it survives HA restarts
     /\ deadT' = IF g2Next /\ Power2 /\ ~Reach THEN Sat(deadT + 1, T_DEAD) ELSE 0
     /\ crashed'  = (crashed \/ lostPow)
     /\ timedOut' = (timedOut \/ DoCutTO)
-    /\ spurious' = (spurious \/ (DoShut /\ ApcIn /\ ~LB))
+    /\ spurious' = (spurious \/ (DoShut /\ ApcIn /\ ~LB /\ ~GsDown))
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
@@ -238,12 +254,12 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
 NoHardCut  == ~crashed     \* no server loses power while RUN / SHUT / BOOT
 NoTimeout  == ~timedOut    \* the T_WAIT alarm never fires
-NoSpurious == ~spurious    \* shutdown only on real outage evidence
+NoSpurious == ~spurious    \* shutdown only on battery, low battery, or the grid sensor reading down
 
 Safety == NoHardCut /\ NoTimeout /\ NoSpurious
 
 (* Liveness: once the grid stays up and HA stops crashing, servers come back *)
 (* and stay back.                                                            *)
-EventuallyRunning == (<>[](grid = "UP") /\ <>[](ha = "UP")) => <>[](srv = "RUN")
+EventuallyRunning == (<>[](grid = "UP") /\ <>[](ha = "UP") /\ <>[](gs = "UP")) => <>[](srv = "RUN")
 
 =============================================================================

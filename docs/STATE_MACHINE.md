@@ -14,10 +14,24 @@ the models win and this document is wrong.
 | **BIOS** | each server | AC present on its PSU | power on when AC returns |
 | **Environment** | — | — | grid up/down at any time; transfer switch GRID/DPU at any time; DPU at any state of charge; HA crash/reboot at any time; server shutdown 2–8 min, boot 2–6 min; ping dying up to 2 min before power-off; human power-off/power-on while input is present |
 
-The controller never looks at the Delta Pro Ultra. Its Bluetooth link goes
-through a proxy that is itself on grid power, so DPU data is unavailable
-exactly when it would matter. The DPU is treated purely as an upstream
-buffer whose only visible effect is *when* the APC loses input.
+The controller never reads the Delta Pro Ultra itself. Its Bluetooth link
+goes through a proxy that is on grid power, so DPU data is unavailable
+exactly when it would matter. To the APC the DPU is an upstream buffer whose
+only visible effect is *when* the APC loses input.
+
+What the controller can use instead is an optional **grid sensor**: one or
+more Home Assistant entities that only work while the grid is up, such as
+the wall charger's voltage. It gives two separate answers. There is
+evidence the grid is **up** if any one of them is available, not "off" and
+not zero. There is evidence it is **down** if every entity that an
+integration is actually providing shows no life, even though the APC still
+has input, which means the DPU is carrying it. An entity that no
+integration is providing says nothing either way. Starting a shutdown needs
+evidence of down; restoring or waking needs evidence of up; a silent sensor
+allows neither. The sensor can be wrong in either direction (a device offline for its
+own reasons, or a stale reading), so it is only allowed to cause a clean
+shutdown and to hold back a restore. It can never cause or permit a cut by
+itself, and the models are checked with a sensor that lies at will.
 
 ## 2. Controller states
 
@@ -73,9 +87,13 @@ own actions (load shed, auto-return) harmless.
   In the TLA+ models this action is still named `DoWol`; the model only
   cares that it powers on exactly the unreachable server.
 
-- Notification only, no action: grid sensor (Tesla Wall Connector voltage)
-  says grid is down while APC is still online. That means the switch is on
-  DPU pass-through and the DPU is carrying the load.
+- **→ SHUTDOWN (grid loss)** when a grid sensor is configured and has read
+  "down" for `T_GS`, even though the APC is online. This saves the DPU for
+  the loads that must stay up. From here the sequence is the ordinary one:
+  commands, cut behind the same guard, CUT. Maintenance turns this trigger
+  off, for when the servers should keep running on the DPU; the on-battery
+  triggers are unaffected.
+- No wake unless the grid sensor (if configured) gives evidence of up.
 
 ### SHUTDOWN (group 2 on)
 
@@ -103,7 +121,9 @@ own actions (load shed, auto-return) harmless.
 
 ### CUT (group 2 off by us)
 
-- `holdT` = consecutive ticks with APC input present.
+- `holdT` = consecutive ticks with APC input present and, if a grid sensor
+  is configured, the grid sensor giving evidence that the grid is up. Input that comes from the DPU
+  is not "power is back".
 - **→ IDLE (restore)** when `holdT ≥ T_HOLD` and reserve ≥ `E_RESTORE`
   (reserve is in minutes with every server running; see section 8):
   SNMP immediate-on on group 2. Servers boot via BIOS.
@@ -126,9 +146,9 @@ own actions (load shed, auto-return) harmless.
 | --- | --- | --- |
 | `NoHardCut` | safety | no server ever loses power while RUN, SHUT or BOOT |
 | `NoTimeout` | safety | the `T_WAIT` alarm never fires (checked without human interference) |
-| `NoSpurious` | safety | SHUTDOWN is entered only on battery or LB |
+| `NoSpurious` | safety | SHUTDOWN is entered only on battery, on LB, or when the grid sensor reads down |
 | `TypeOK` | safety | all counters stay in range |
-| `EventuallyRunning` | liveness | if grid and HA eventually stay up (and, in the two-server model, humans stop acting), every server not deliberately powered off by a human is eventually running and stays running |
+| `EventuallyRunning` | liveness | if grid and HA eventually stay up, the grid sensor (if any) eventually keeps reading up, and, in the two-server model, humans stop acting, then every server not deliberately powered off by a human is eventually running and stays running |
 
 ## 5. Verification results
 
@@ -170,6 +190,7 @@ table, pass/fail per variant, and counterexample traces.
 | 1 tick | 2 min |
 | `e` = 1 | 1 min of full-load runtime (57 at full charge); drains 2/tick with servers on, 1/tick with only group 1 |
 | `T_OB` = 1 | shutdown starts 2 min after going on battery |
+| `T_GS` = 1 | shutdown starts after the grid sensor has read down for 5 min (`t_grid`, 300 s; the model uses one tick) |
 | `T_GRACE` = 1 | wait 2 min after the last ping before cutting |
 | `T_DEAD` = 5 | 10 min dark (persisted) before cutting a group whose servers are all off |
 | `T_WOL` = 5 | 10 min with one server down and one up before iDRAC power-on of the down one |
@@ -201,7 +222,9 @@ the model already allows.
 | Disarmed (the default after install): readings and timers run, decisions are computed on a copy and published as `would_act`, nothing is sent. | No actions. |
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
 | The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), when the group has been off with stable input for six hours without a restore, and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
-| The "grid down but APC online" notification is not part of the integration. | Notification only. A plain automation on the wall connector's voltage does it. |
+| The grid sensor is a list of entities with three outcomes (up, down, silent) rather than the model's two. Its timers restart after a gap in readings like every other timer. | Silent has a subset of the effects of the model's "down": it holds back restore and wake but starts nothing. The model's sensor may read down at any time, so every silent behaviour is covered. |
+| The grid-loss shutdown waits until the controller is calibrated: idle load set and peak load known. | Only removes a shutdown. Without the idle load no cut is allowed, and without the peak no restore is, so a grid shutdown before either would leave the servers off. The on-battery triggers do not wait. |
+| A grid entity that no integration is providing says nothing and raises the problem sensor: one Home Assistant does not know at all (renamed, deleted), or one it has only restored as a placeholder after a restart because the owning integration has not loaded. A silent sensor cannot start a shutdown and cannot allow a restore or a wake. The second half matters after a Home Assistant restart in the middle of an outage: the wall charger has no power, its integration cannot load, and the servers must not come back on the DPU. If the group has been off for six hours with UPS input present and no evidence of the grid in all that time, the problem sensor turns on. That six-hour timer is not stored and restarts with Home Assistant, after an unreadable stretch, and whenever the sensor reads up once; `waiting_for_grid` says why from the first minute regardless. Turning maintenance off restarts the grid timer. | Reporting, and removing shutdowns. A sensor that stops working must not keep the servers off unnoticed. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives
 this code through random outages. Unlike the model, its UPS reports runtime
