@@ -126,6 +126,22 @@ async def test_config_flow_creates_entry(hass, rig):
     assert hass.states.get("switch.ups_sync_armed").state == "off"
 
 
+async def test_config_flow_numbers_are_typed_boxes_and_stored_as_integers(hass, rig):
+    """A bare range renders as a slider that shows no value."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    box = result["data_schema"].schema["group"].validators[0]
+    assert box.config["mode"] == "box" and (box.config["min"], box.config["max"]) == (1, 16)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {**UPS, "group": 3.0})
+    port = result["data_schema"].schema["reach_port"].validators[0]
+    assert port.config["mode"] == "box"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**SERVERS[0], "reach_port": 443.0, "add_another": False}
+    )
+    assert result["title"] == "UPS 10.0.0.4 group 3"
+    group, reach = result["data"]["group"], result["data"]["servers"][0]["reach_port"]
+    assert (group, reach) == (3, 443) and type(group) is int and type(reach) is int
+
+
 async def test_config_flow_errors(hass, rig):
     rig.read_error = "timeout"
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
