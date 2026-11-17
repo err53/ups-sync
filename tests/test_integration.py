@@ -32,6 +32,7 @@ class Rig:
         self.now = 1000.0
         self.reading = UpsReading(True, False, False, 57.0, 400.0, True)
         self.read_error = None
+        self.group_name = "Servers"
         self.reach = {"10.0.0.13": True, "10.0.0.11": True}
         self.chassis = {"10.0.0.12": True, "10.0.0.10": True}
         self.calls = []
@@ -48,6 +49,9 @@ class Rig:
 
             async def set_group(self, on):
                 rig.calls.append(("group", on))
+
+            async def group_name(self):
+                return rig.group_name
 
         async def reachable(server):
             return rig.reach[server.cfg.host]
@@ -112,14 +116,20 @@ async def test_config_flow_creates_entry(hass, rig):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], UPS)
     assert result["step_id"] == "server"
+    # The form says which UPS and group it means, by number and by name.
+    assert result["description_placeholders"] == {
+        "host": "10.0.0.4", "group": '2 "Servers"', "added": "none yet"
+    }
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SERVERS[0], "add_another": True}
     )
     assert result["step_id"] == "server"
+    assert result["description_placeholders"]["added"] == "f"
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SERVERS[1], "add_another": False}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == 'UPS 10.0.0.4 group 2 "Servers"'
     assert result["data"] == {**UPS, "servers": SERVERS}
     await hass.async_block_till_done()
     assert hass.states.get("sensor.ups_sync_state").state == "idle"
@@ -143,7 +153,7 @@ async def test_config_flow_numbers_are_typed_boxes_and_stored_as_integers(hass, 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SERVERS[0], "reach_port": 443.0, "add_another": False}
     )
-    assert result["title"] == "UPS 10.0.0.4 group 3"
+    assert result["title"] == 'UPS 10.0.0.4 group 3 "Servers"'
     group, reach = result["data"]["group"], result["data"]["servers"][0]["reach_port"]
     assert (group, reach) == (3, 443) and type(group) is int and type(reach) is int
 

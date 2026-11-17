@@ -12,8 +12,8 @@
         }
       },
       "server": {
-        "title": "Server on this outlet group",
-        "description": "Each server needs at least one shutdown channel: an iDRAC, a Proxmox API token, or both.",
+        "title": "Add a server powered by outlet group {group}",
+        "description": "A server plugged into outlet group {group} of the UPS at {host}. The controller shuts these servers down in an outage and then switches that group off.\n\nAdded so far: {added}.\n\nEach server needs at least one shutdown channel: an iDRAC, a Proxmox API token, or both.",
         "data": {
           "name": "Name",
           "host": "Host",

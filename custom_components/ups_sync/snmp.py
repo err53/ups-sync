@@ -15,6 +15,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     set_cmd,
 )
 from pysnmp.proto.rfc1902 import Integer32
+from pysnmp.proto.rfc1905 import EndOfMibView, NoSuchInstance, NoSuchObject
 from pysnmp.smi import view
 
 _APC = "1.3.6.1.4.1.318.1.1.1"
@@ -23,6 +24,7 @@ OID_RUNTIME = f"{_APC}.2.2.3.0"  # upsAdvBatteryRunTimeRemaining, 1/100 s
 OID_WATTS = f"{_APC}.4.2.8.0"  # upsAdvOutputActivePower
 OID_LOW_BATT = f"{_APC}.5.2.8.0"  # upsAdvConfigLowBatteryRunTime, 1/100 s
 OID_GROUP_STATE = f"{_APC}.12.1.2.1.3"  # .<group>: 1 on, 2 off
+OID_GROUP_NAME = f"{_APC}.12.2.2.1.2"  # .<group>: the name set on the card
 OID_GROUP_CMD = f"{_APC}.12.3.2.1.3"  # .<group>: 1 immediate on, 2 immediate off
 
 STATUS_ON_BATTERY = 3
@@ -116,6 +118,25 @@ class ApcClient:
         except Exception as exc:  # pysnmp raises many unrelated types
             raise UpsError(str(exc)) from exc
         return parse_reading(*self._check(err_ind, err_status, binds))
+
+    async def group_name(self) -> str:
+        """The name the card gives this outlet group, or "" if it has none."""
+        try:
+            err_ind, err_status, _, binds = await get_cmd(
+                self._engine,
+                self._read,
+                await self._target(),
+                ContextData(),
+                ObjectType(ObjectIdentity(f"{OID_GROUP_NAME}.{self._group}")),
+            )
+            if err_ind or err_status:
+                return ""
+            value = binds[0][1]
+            if isinstance(value, (NoSuchObject, NoSuchInstance, EndOfMibView)):
+                return ""
+            return value.prettyPrint().strip()
+        except Exception:  # the name is a courtesy; never fail setup over it
+            return ""
 
     async def set_group(self, on: bool) -> None:
         try:
