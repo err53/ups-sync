@@ -82,7 +82,13 @@ Do these once, in order, when you can watch the servers.
   switch is set. They stay off until the grid is back and has been stable
   for six minutes. Moving the switch to the home battery does not bring
   them back. To run them on the home battery anyway, turn on Maintenance
-  and switch the group on yourself.
+  and switch the group on yourself. Turning Maintenance off again while
+  the grid is still out starts the five minutes afresh, then shuts them
+  down.
+  If the servers stay off after the grid is back, look at the state
+  sensor: `waiting_for_grid: true` means the grid entities still read
+  down, and `grid_entities_missing` lists any that Home Assistant no
+  longer knows.
 - **Without grid entities:** with the transfer switch on grid, moving it to
   the battery within two minutes of the outage avoids a shutdown. Later
   than that, the shutdown runs to the end and the servers come back once

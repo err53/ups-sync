@@ -402,12 +402,42 @@ def test_no_grid_shutdown_before_a_restore_could_ever_be_approved():
     assert step(st, obs(grid=False, reserve=None), 0) == []
     assert step(st, obs(grid=False, reserve=None), 900) == []
     assert st.ctl == IDLE
+    # Nor before the idle load is set: the cut could never be approved, and
+    # the servers would sit shut down on live outlets.
+    uncalibrated = Params(load_idle_max=None)
+    st = State()
+    assert step(st, obs(grid=False), 0, uncalibrated) == []
+    assert step(st, obs(grid=False), 900, uncalibrated) == []
+    assert st.ctl == IDLE
+    st = State()
     # A real outage is never held back by this.
     step(st, obs(grid=False, reserve=None, battery=True), 915)
     assert kinds(step(st, obs(grid=False, reserve=None, battery=True), 1035)) == [
         ("shutdown", "f"),
         ("shutdown", "s"),
     ]
+
+
+def test_reason_names_the_trigger_that_actually_fired():
+    """On battery for a moment, but it is the grid timer that expired."""
+    st = State()
+    step(st, obs(grid=False), 0)
+    step(st, obs(grid=False), 270)
+    acts = step(st, obs(grid=False, battery=True), 300)
+    assert "grid is down" in acts[0].reason
+
+
+def test_stuck_when_the_grid_sensor_keeps_the_group_off_for_hours():
+    st = State(ctl=CUT)
+    held = obs(group=False, f=OFF, s=OFF, load=150, grid=False)
+    assert step(st, held, 0) == []
+    step(st, held, 6 * 3600 - 30)
+    assert not stuck(st, held, 6 * 3600 - 30, 0, P)
+    step(st, held, 6 * 3600)
+    assert stuck(st, held, 6 * 3600, 0, P)
+    # With the UPS itself on battery it is simply an outage, not "stuck".
+    dark = obs(group=False, f=OFF, s=OFF, load=150, grid=False, battery=True)
+    assert not stuck(st, dark, 6 * 3600, 0, P)
 
 
 def test_grid_timer_does_not_count_unwatched_time():

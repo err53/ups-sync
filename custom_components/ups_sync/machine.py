@@ -164,7 +164,10 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
     """Servers are off and the controller cannot bring them back.
 
     Idle: every server silent for t_dead, yet the guard refuses the cycle.
-    Cut: input has been stable for hours and the reserve still falls short.
+    Cut: for hours the UPS has had input, yet no restore: the reserve still
+    falls short, or the grid sensor has read down all that time. The second
+    may be a real long outage or a sensor that has stopped working; either
+    way a person should know.
     """
     if st.ctl == IDLE:
         return (
@@ -173,7 +176,10 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
             and _held(st.dead_since, wall, p.t_dead)
             and not cut_guard(obs, p)
         )
-    return st.ctl == CUT and _held(st.hold_since, mono, RESTORE_OVERDUE)
+    return st.ctl == CUT and (
+        _held(st.hold_since, mono, RESTORE_OVERDUE)
+        or (obs.input_present and _held(st.grid_since, mono, RESTORE_OVERDUE))
+    )
 
 
 def _since(cond: bool, since: float | None, now: float) -> float | None:
@@ -243,18 +249,17 @@ def decide(
         # DoShut. The grid-sensor trigger saves the upstream battery for the
         # loads that must stay up. It is an economy, not a safety rule, so
         # maintenance turns it off; the on-battery triggers always apply.
-        # It also waits until a restore could be approved (peak load known):
-        # an economy must not turn the servers off for good.
+        # It also waits until the cut and the restore that follow could be
+        # approved (idle load set, peak load known): an economy must not
+        # turn the servers off for good.
+        on_battery = obs.on_battery and _held(st.ob_since, mono, p.t_ob)
         on_grid_loss = (
             not maintenance
+            and p.load_idle_max is not None
             and obs.reserve_min is not None
             and _held(st.grid_since, mono, p.t_grid)
         )
-        if obs.group_on and (
-            obs.low_battery
-            or (obs.on_battery and _held(st.ob_since, mono, p.t_ob))
-            or on_grid_loss
-        ):
+        if obs.group_on and (obs.low_battery or on_battery or on_grid_loss):
             st.ctl = SHUTDOWN
             st.shutdown_since = mono
             st.acked.clear()
@@ -264,7 +269,7 @@ def decide(
                 "low battery"
                 if obs.low_battery
                 else "on battery"
-                if obs.on_battery
+                if on_battery
                 else "grid is down, saving the upstream battery"
             )
             return _shutdown_cmds(st, obs, mono, p, why)

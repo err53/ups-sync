@@ -144,7 +144,7 @@ own actions (load shed, auto-return) harmless.
 | `NoTimeout` | safety | the `T_WAIT` alarm never fires (checked without human interference) |
 | `NoSpurious` | safety | SHUTDOWN is entered only on battery, on LB, or when the grid sensor reads down |
 | `TypeOK` | safety | all counters stay in range |
-| `EventuallyRunning` | liveness | if grid and HA eventually stay up (and, in the two-server model, humans stop acting), every server not deliberately powered off by a human is eventually running and stays running |
+| `EventuallyRunning` | liveness | if grid and HA eventually stay up, the grid sensor (if any) eventually keeps reading up, and, in the two-server model, humans stop acting, then every server not deliberately powered off by a human is eventually running and stays running |
 
 ## 5. Verification results
 
@@ -219,7 +219,8 @@ the model already allows.
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
 | The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), when the group has been off with stable input for six hours without a restore, and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
 | The grid sensor is a list of entities, and "down" means none of them shows life. Its timer restarts after a gap in readings like every other timer. | In the model the sensor is a single reading that may be wrong at any time, which covers any way of computing it. |
-| The grid-loss shutdown waits until a peak load is known. | Only removes a shutdown. Without it, a sensor reading down just after set-up would cut a group that no restore could then be approved for. The on-battery triggers do not wait. |
+| The grid-loss shutdown waits until the controller is calibrated: idle load set and peak load known. | Only removes a shutdown. Without the idle load no cut is allowed, and without the peak no restore is, so a grid shutdown before either would leave the servers off. The on-battery triggers do not wait. |
+| A grid entity Home Assistant does not know at all (not loaded yet, renamed, deleted) is left out of the reading and raises the problem sensor. If the group has been off for six hours with UPS input present and the sensor reading down the whole time, the problem sensor turns on, and `waiting_for_grid` says why from the first minute. Turning maintenance off restarts the grid timer. | Reporting, and removing shutdowns. A sensor that stops working must not keep the servers off unnoticed. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives
 this code through random outages. Unlike the model, its UPS reports runtime

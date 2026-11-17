@@ -185,8 +185,13 @@ class World:
         for act in decide(self.st, o, self.t, self.t, P, False):
             failed = self.r.random() < self.cmd_fail
             if act.kind == "shutdown":
-                started_now = self.st.shutdown_since == self.t
-                assert o.on_battery or o.grid_down or not started_now, "spurious"
+                if self.st.shutdown_since == self.t and not o.on_battery:
+                    # Only the grid trigger may start one with the UPS online,
+                    # and only when all its conditions hold.
+                    held = self.st.grid_since is not None and (
+                        self.t - self.st.grid_since >= P.t_grid
+                    )
+                    assert o.grid_down and held and o.reserve_min is not None, "spurious"
                 if not failed:
                     self.st.acked.add(act.server)
                     if self.srv[act.server] in ("RUN", "BOOT"):  # it answered

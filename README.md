@@ -40,7 +40,10 @@ group is not restored until one shows life again.
 
 Pick entities that are reliably available. If all of them drop out for some
 other reason, the servers are shut down cleanly and come back when one
-returns; nothing is ever hard-cut on this signal. Turning on Maintenance
+returns; nothing is ever hard-cut on this signal. This trigger only works
+once the controller is calibrated. An entity that Home Assistant no longer
+knows is ignored and raises the problem sensor, and so does a group that
+has been held off by the grid entities for six hours. Turning on Maintenance
 disables this trigger, for when you want the servers to keep running on the
 home battery.
 

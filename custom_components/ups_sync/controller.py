@@ -58,6 +58,7 @@ class Controller:
         self.params = params
         self.notify_services = notify_services
         self.grid_entities = grid_entities or []
+        self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
         self.armed = False
@@ -113,7 +114,7 @@ class Controller:
             if name == "maintenance" and not value:
                 # Whatever was done by hand must be watched afresh.
                 self.state.dead_since = self.state.seen_dark_since = None
-                self.state.partial_since = None
+                self.state.partial_since = self.state.grid_since = None
             await self._save_if_changed()
         self._notify_listeners()
 
@@ -139,6 +140,8 @@ class Controller:
             or self.stuck
             or self.group_cmd_failed
             or not self.calibrated
+            # At startup other integrations may simply not have loaded yet.
+            or (bool(self.grid_missing) and self.hass.is_running)
         )
 
     @property
@@ -158,6 +161,10 @@ class Controller:
             "ups_stale": self.stale,
             "calibrated": self.calibrated,
             "stuck_servers_off": self.stuck,
+            "waiting_for_grid": bool(
+                self.obs and self.obs.grid_down and self.state.ctl == CUT
+            ),
+            "grid_entities_missing": self.grid_missing,
             "group_command_failed": self.group_cmd_failed,
             "peak_load_w": self.peak,
             "acked": sorted(self.state.acked),
@@ -183,17 +190,24 @@ class Controller:
         wall charger's voltage sensor. One entity that is available, not
         "off" and not zero is enough to call the grid up. With none
         configured the feature is off.
-        """
-        if not self.grid_entities:
-            return False
-        return not any(self._shows_grid(e) for e in self.grid_entities)
 
-    def _shows_grid(self, entity_id: str) -> bool:
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF, ""):
+        An entity Home Assistant does not know at all (not loaded yet, since
+        renamed or deleted) is no evidence either way and is left out. It is
+        listed in `grid_entities_missing` and raises the problem sensor.
+        """
+        states = [self.hass.states.get(e) for e in self.grid_entities]
+        self.grid_missing = [
+            e for e, s in zip(self.grid_entities, states, strict=True) if s is None
+        ]
+        known = [s for s in states if s is not None]
+        return bool(known) and not any(self._shows_grid(s.state) for s in known)
+
+    @staticmethod
+    def _shows_grid(state: str) -> bool:
+        if state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF, ""):
             return False
         try:
-            return float(state.state) > 0
+            return float(state) > 0
         except ValueError:
             return True
 

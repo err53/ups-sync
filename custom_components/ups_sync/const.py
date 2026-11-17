@@ -23,7 +23,8 @@ OPT_TIMINGS = (
 )
 # Lowest value the options form accepts. Default 10 s.
 # e_restore: formal/RESULTS.md needs shed + boot + shutdown = 17 min at least.
-MIN_OPTION = {"e_restore": 20}
+# t_grid: a grid sensor is slower and less sure than the UPS itself.
+MIN_OPTION = {"e_restore": 20, "t_grid": 120}
 
 POLL_SECONDS = 15
 STALE_SECONDS = 120

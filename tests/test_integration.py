@@ -370,13 +370,100 @@ async def test_grid_entities_trigger_shutdown_and_hold_back_restore(hass, rig):
 @pytest.mark.parametrize(
     ("state", "shows_grid"),
     [("241.5", True), ("0", False), ("0.0", False), ("on", True), ("home", True),
-     ("off", False), ("unavailable", False), ("unknown", False), (None, False)],
+     ("off", False), ("unavailable", False), ("unknown", False)],
 )
 async def test_what_counts_as_the_grid_being_up(hass, rig, state, shows_grid):
-    if state is not None:
-        hass.states.async_set("sensor.g", state)
+    hass.states.async_set("sensor.g", state)
     ctl = await setup(hass, rig, {"grid_entities": ["sensor.g"]})
     assert ctl.obs.grid_down is not shows_grid
+    assert ctl.grid_missing == []
+
+
+async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, rig):
+    """Not loaded yet, renamed or deleted: no evidence, but worth a warning."""
+    hass.states.async_set("sensor.real", "unavailable")
+    ctl = await setup(
+        hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.typo", "sensor.late"]}
+    )
+    await ctl.async_set_flag("armed", True)
+    await rig.run(ctl, 900)
+    assert not ctl.obs.grid_down and rig.calls == []
+    assert ctl.grid_missing == ["sensor.typo", "sensor.late"]
+    attrs = hass.states.get("sensor.ups_sync_state").attributes
+    assert attrs["grid_entities_missing"] == ["sensor.typo", "sensor.late"]
+    assert ctl.problem  # Home Assistant is running: they should exist by now
+
+    # One loads late and shows the grid up: fine. The typo still warns.
+    hass.states.async_set("sensor.late", "240")
+    await rig.run(ctl, 15)
+    assert not ctl.obs.grid_down and ctl.grid_missing == ["sensor.typo"] and ctl.problem
+    # The known one going unavailable IS a grid loss, typo or not.
+    hass.states.async_set("sensor.late", "unavailable")
+    await rig.run(ctl, 315)
+    assert ctl.obs.grid_down and rig.calls == [("shutdown", "f"), ("shutdown", "s")]
+
+
+async def test_grid_shutdown_waits_for_calibration(hass, rig):
+    """No idle load set: a cut could never be approved, so do not start."""
+    hass.states.async_set("sensor.g", "unavailable")
+    ctl = await setup(hass, rig, {"grid_entities": ["sensor.g"]})
+    await ctl.async_set_flag("armed", True)
+    assert ctl.peak == 400.0 and not ctl.calibrated
+    await rig.run(ctl, 1800)
+    assert rig.calls == [] and ctl.state.ctl == "idle"
+
+
+async def test_grid_sensor_holding_the_group_off_is_reported(hass, rig):
+    hass.states.async_set("sensor.g", "240")
+    ctl = await setup(hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.g"]})
+    await ctl.async_set_flag("armed", True)
+    hass.states.async_set("sensor.g", "unavailable")
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    await rig.run(ctl, 60)
+    attrs = hass.states.get("sensor.ups_sync_state").attributes
+    assert attrs["waiting_for_grid"] is True and not ctl.stuck
+    await rig.run(ctl, 6 * 3600)
+    assert ctl.stuck and ctl.problem and ("group", True) not in rig.calls
+
+
+async def test_reloading_options_while_cut_and_grid_down_keeps_the_group_off(hass, rig):
+    hass.states.async_set("sensor.g", "unavailable")
+    ctl = await setup(hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.g"]})
+    await ctl.async_set_flag("armed", True)
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    await rig.run(ctl, 600)
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "t_grid": 600}
+    )
+    await hass.async_block_till_done()
+    again = entry.runtime_data
+    assert again is not ctl and again.armed and again.state.ctl == "cut"
+    await rig.run(again, 1800)
+    assert rig.calls == [] and again.obs.grid_down
+    hass.states.async_set("sensor.g", "240")
+    await rig.run(again, 345)
+    assert rig.calls == []  # six minutes of grid first
+    await rig.run(again, 30)
+    assert rig.calls[0] == ("group", True) and set(rig.calls) == {("group", True)}
+
+
+async def test_turning_maintenance_off_restarts_the_grid_timer(hass, rig):
+    hass.states.async_set("sensor.g", "unavailable")
+    ctl = await setup(hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.g"]})
+    await ctl.async_set_flag("armed", True)
+    await ctl.async_set_flag("maintenance", True)
+    await rig.run(ctl, 1800)
+    assert rig.calls == []
+    await ctl.async_set_flag("maintenance", False)
+    await rig.run(ctl, 285)
+    assert rig.calls == []
+    await rig.run(ctl, 30)
+    assert rig.calls == [("shutdown", "f"), ("shutdown", "s")]
 
 
 async def test_no_grid_entities_means_the_feature_is_off(hass, rig):
