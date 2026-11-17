@@ -68,9 +68,10 @@ class World:
     ) -> None:
         self.r = random.Random(seed)
         self.humans, self.cmd_fail = humans, cmd_fail
-        # Optional grid sensor. It flips at random, unrelated to the UPS
-        # input, so it is often wrong in both directions.
-        self.sensor, self.grid_down, self.grid_until = sensor, False, 0
+        # Optional grid sensor. It moves at random between "up", "down" and
+        # "silent" (no entity being provided), unrelated to the UPS input,
+        # so it is often wrong in both directions.
+        self.sensor, self.grid, self.grid_until = sensor, "up", 0
         self.t = 0
         self.e = E_MAX
         self.input = True
@@ -146,7 +147,8 @@ class World:
             load_w=load_w,
             group_on=self.group,
             servers=servers,
-            grid_down=self.sensor and self.grid_down,
+            grid_down=self.sensor and self.grid == "down",
+            grid_ok=not self.sensor or self.grid == "up",
         )
 
     # ---- server state changes --------------------------------------------
@@ -202,7 +204,7 @@ class World:
                 enter_cut(self.st)
             elif act.kind == "restore" and not failed:
                 assert o.reserve_min >= P.e_restore
-                assert not o.grid_down, "restored while the grid sensor read down"
+                assert o.grid_ok, "restored without the grid sensor reading up"
                 self.restores.append(self.e)
                 self.set_group(True, "ha")
             elif act.kind == "wake" and not failed:
@@ -224,9 +226,9 @@ class World:
                 )
                 self.power_edge(was)
             if self.sensor and self.t >= self.grid_until:
-                self.grid_down = not self.grid_down
+                self.grid = r.choice([g for g in ("up", "down", "silent") if g != self.grid])
                 self.grid_until = self.t + (
-                    r.randint(60, 10800) if self.grid_down else r.randint(60, 14400)
+                    r.randint(60, 14400) if self.grid == "up" else r.randint(60, 10800)
                 )
             if r.random() < 1 / 1500:
                 self.ha_down_until = self.t + r.randint(30, 900)
@@ -312,7 +314,7 @@ def run(
         w.step()
     # Settle: power and HA stay up, nobody interferes.
     w.settling = True
-    w.grid_down = False
+    w.grid = "up"
     was = w.powered()
     w.input = True
     w.power_edge(was)
@@ -341,8 +343,9 @@ def test_no_hard_cut_with_humans_and_failing_commands(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_no_hard_cut_with_a_grid_sensor_that_is_often_wrong(seed):
-    """The sensor says "grid down" and "grid up" at random. Servers may be shut
-    down more than needed, but never cut while running, and they come back."""
+    """The sensor says "grid down", "grid up" or nothing, at random. Servers may
+    be shut down more than needed, but never cut while running, never
+    restored without the sensor reading up, and they come back."""
     w = run(seed, sensor=True)
     assert all(s == "RUN" for s in w.srv.values()), w.srv
     assert w.st.ctl == IDLE and w.group

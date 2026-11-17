@@ -375,7 +375,7 @@ async def test_grid_entities_trigger_shutdown_and_hold_back_restore(hass, rig):
 async def test_what_counts_as_the_grid_being_up(hass, rig, state, shows_grid):
     hass.states.async_set("sensor.g", state)
     ctl = await setup(hass, rig, {"grid_entities": ["sensor.g"]})
-    assert ctl.obs.grid_down is not shows_grid
+    assert ctl.obs.grid_down is not shows_grid and ctl.obs.grid_ok is shows_grid
     assert ctl.grid_missing == []
 
 
@@ -387,7 +387,7 @@ async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, r
     )
     await ctl.async_set_flag("armed", True)
     await rig.run(ctl, 900)
-    assert not ctl.obs.grid_down and rig.calls == []
+    assert not ctl.obs.grid_down and not ctl.obs.grid_ok and rig.calls == []
     assert ctl.grid_missing == ["sensor.typo", "sensor.late"]
     attrs = hass.states.get("sensor.ups_sync_state").attributes
     assert attrs["grid_entities_missing"] == ["sensor.typo", "sensor.late"]
@@ -408,6 +408,28 @@ async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, r
     hass.states.async_set("sensor.late", "unavailable")
     await rig.run(ctl, 315)
     assert ctl.obs.grid_down and rig.calls == [("shutdown", "f"), ("shutdown", "s")]
+
+
+async def test_ha_restart_during_an_outage_does_not_restore_on_the_home_battery(hass, rig):
+    """After the grid shutdown, HA restarts. The charger has no power, so its
+    integration cannot load and its entity is only a restored placeholder."""
+    hass.states.async_set("sensor.g", "unavailable", {"restored": True})
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    rig.reach = dict.fromkeys(rig.reach, False)
+    rig.chassis = dict.fromkeys(rig.chassis, False)
+    ctl = await setup(hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.g"]})
+    ctl.peak = 400.0  # stored from before the restart
+    await ctl.async_set_flag("armed", True)
+    await rig.run(ctl, 3600)
+    assert rig.calls == [] and ctl.state.ctl == "cut"
+    assert not ctl.obs.grid_down and not ctl.obs.grid_ok
+    assert hass.states.get("sensor.ups_sync_state").attributes["waiting_for_grid"]
+    # The grid returns, the charger's integration loads, the entity is real.
+    hass.states.async_set("sensor.g", "241")
+    await rig.run(ctl, 345)
+    assert rig.calls == []
+    await rig.run(ctl, 30)
+    assert rig.calls[0] == ("group", True)
 
 
 async def test_grid_shutdown_waits_for_calibration(hass, rig):
@@ -475,7 +497,7 @@ async def test_turning_maintenance_off_restarts_the_grid_timer(hass, rig):
 
 async def test_no_grid_entities_means_the_feature_is_off(hass, rig):
     ctl = await setup(hass, rig, {"load_idle_max": 210})
-    assert ctl.obs.grid_down is False
+    assert ctl.obs.grid_down is False and ctl.obs.grid_ok is True
 
 
 async def test_options_form_offers_grid_entities(hass, rig):

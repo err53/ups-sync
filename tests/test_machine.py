@@ -36,7 +36,8 @@ def obs(
         load_w=load,
         group_on=group,
         servers={"f": f, "s": s},
-        grid_down=not grid,
+        grid_down=grid is False,
+        grid_ok=grid is True,
     )
 
 
@@ -437,7 +438,30 @@ def test_stuck_when_the_grid_sensor_keeps_the_group_off_for_hours():
     assert stuck(st, held, 6 * 3600, 0, P)
     # With the UPS itself on battery it is simply an outage, not "stuck".
     dark = obs(group=False, f=OFF, s=OFF, load=150, grid=False, battery=True)
-    assert not stuck(st, dark, 6 * 3600, 0, P)
+    step(st, dark, 6 * 3600 + 15)
+    assert not stuck(st, dark, 6 * 3600 + 15, 0, P)
+
+
+def test_a_silent_grid_sensor_neither_shuts_down_nor_restores():
+    """grid=None: no entity is being provided, so there is no evidence."""
+    st = State()
+    assert step(st, obs(grid=None), 0) == []
+    assert step(st, obs(grid=None), 3600) == []
+    assert st.ctl == IDLE
+
+    st = State(ctl=CUT)
+    off = dict(group=False, f=OFF, s=OFF, load=150)
+    assert step(st, obs(grid=None, **off), 0) == []
+    assert step(st, obs(grid=None, **off), 3600) == []  # input present, grid unconfirmed
+    assert not stuck(st, obs(grid=None, **off), 3600, 0, P)
+    step(st, obs(grid=None, **off), 6 * 3600)
+    assert stuck(st, obs(grid=None, **off), 6 * 3600, 0, P)
+    assert step(st, obs(**off), 6 * 3600 + 375) == []  # six minutes of grid first
+    assert kinds(step(st, obs(**off), 6 * 3600 + 405)) == [("restore", None)]
+
+    st = State()
+    assert [a for a in step(st, obs(f=OFF, s=UP, load=300, grid=None), 0)] == []
+    assert step(st, obs(f=OFF, s=UP, load=300, grid=None), 900) == []  # no wake
 
 
 def test_grid_timer_does_not_count_unwatched_time():

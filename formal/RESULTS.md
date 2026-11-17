@@ -284,19 +284,27 @@ adversarial sensor is covered by the single-server model and the simulator.
 
 ### Simulator
 
-`tests/test_sim.py` has a sensor that flips at random, unrelated to the UPS
-input, so it is wrong much of the time in both directions.
+`tests/test_sim.py` has a sensor that moves at random between up, down and
+silent (no entity being provided), unrelated to the UPS input, so it is
+wrong much of the time in both directions.
 
 | Variant (3000 runs of 20 simulated hours each) | Result |
 | --- | --- |
-| random sensor | no hard cut, every run recovers, nothing restored while the sensor read down. Four runs raised the shutdown alarm; each had two long unreadable-UPS stretches in a row during a shutdown |
+| random sensor | no hard cut, every run recovers, nothing restored without the sensor reading up. One run raised the shutdown alarm, with two long unreadable-UPS stretches in a row during a shutdown |
 | random sensor, humans and 30 % of commands failing | pass |
-| hold timer ignores the sensor (mutation) | caught on the first run: restored while the sensor read down |
+| hold timer ignores the sensor (mutation) | caught on the first run |
 
-The simulator found one bug in the first version of this change. A sensor
-that read down in the first minutes after set-up, before any peak load was
-known, shut the servers down and cut the group, and no restore could then be
-approved. Review found the matching case for the cut: with no idle load
-set, no cut can be approved either. The grid trigger now waits until the
-controller is calibrated (idle load set, peak load known). A real outage is
-not held back by that.
+Three bugs were found in this change before it merged.
+
+1. By the simulator: a sensor that read down in the first minutes after
+   set-up, before any peak load was known, shut the servers down and cut
+   the group, and no restore could then be approved.
+2. By review: the same with no idle load set, where no cut can be approved
+   either. The grid trigger now waits until the controller is calibrated.
+   A real outage is not held back by that.
+3. By review: after a Home Assistant restart in the middle of an outage the
+   grid entity is only a placeholder, because the charger has no power and
+   its integration cannot load. Counting that as "down" would shut the
+   servers down after any slow restart; counting it as "not down" let the
+   servers be restored on the DPU. The sensor now gives two answers,
+   evidence of down and evidence of up, and a silent sensor gives neither.

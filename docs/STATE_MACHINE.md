@@ -21,10 +21,14 @@ only visible effect is *when* the APC loses input.
 
 What the controller can use instead is an optional **grid sensor**: one or
 more Home Assistant entities that only work while the grid is up, such as
-the wall charger's voltage. The grid counts as up if any one of them is
-available, not "off" and not zero. When none is, the grid is taken to be
-down even though the APC still has input, which means the DPU is carrying
-it. The sensor can be wrong in either direction (a device offline for its
+the wall charger's voltage. It gives two separate answers. There is
+evidence the grid is **up** if any one of them is available, not "off" and
+not zero. There is evidence it is **down** if every entity that an
+integration is actually providing shows no life, even though the APC still
+has input, which means the DPU is carrying it. An entity that no
+integration is providing says nothing either way. Starting a shutdown needs
+evidence of down; restoring or waking needs evidence of up; a silent sensor
+allows neither. The sensor can be wrong in either direction (a device offline for its
 own reasons, or a stale reading), so it is only allowed to cause a clean
 shutdown and to hold back a restore. It can never cause or permit a cut by
 itself, and the models are checked with a sensor that lies at will.
@@ -89,7 +93,7 @@ own actions (load shed, auto-return) harmless.
   commands, cut behind the same guard, CUT. Maintenance turns this trigger
   off, for when the servers should keep running on the DPU; the on-battery
   triggers are unaffected.
-- No wake while the grid sensor reads down.
+- No wake unless the grid sensor (if configured) gives evidence of up.
 
 ### SHUTDOWN (group 2 on)
 
@@ -118,7 +122,7 @@ own actions (load shed, auto-return) harmless.
 ### CUT (group 2 off by us)
 
 - `holdT` = consecutive ticks with APC input present and, if a grid sensor
-  is configured, the grid sensor reading up. Input that comes from the DPU
+  is configured, the grid sensor giving evidence that the grid is up. Input that comes from the DPU
   is not "power is back".
 - **→ IDLE (restore)** when `holdT ≥ T_HOLD` and reserve ≥ `E_RESTORE`
   (reserve is in minutes with every server running; see section 8):
@@ -218,9 +222,9 @@ the model already allows.
 | Disarmed (the default after install): readings and timers run, decisions are computed on a copy and published as `would_act`, nothing is sent. | No actions. |
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
 | The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), when the group has been off with stable input for six hours without a restore, and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
-| The grid sensor is a list of entities, and "down" means none of them shows life. Its timer restarts after a gap in readings like every other timer. | In the model the sensor is a single reading that may be wrong at any time, which covers any way of computing it. |
+| The grid sensor is a list of entities with three outcomes (up, down, silent) rather than the model's two. Its timers restart after a gap in readings like every other timer. | Silent has a subset of the effects of the model's "down": it holds back restore and wake but starts nothing. The model's sensor may read down at any time, so every silent behaviour is covered. |
 | The grid-loss shutdown waits until the controller is calibrated: idle load set and peak load known. | Only removes a shutdown. Without the idle load no cut is allowed, and without the peak no restore is, so a grid shutdown before either would leave the servers off. The on-battery triggers do not wait. |
-| A grid entity that no integration is providing is left out of the reading and raises the problem sensor: one Home Assistant does not know at all (renamed, deleted), or one it has only restored as a placeholder after a restart because the owning integration has not loaded. If the group has been off for six hours with UPS input present and the sensor reading down the whole time, the problem sensor turns on. That six-hour timer is not stored and restarts with Home Assistant, after an unreadable stretch, and whenever the sensor reads up once; `waiting_for_grid` says why from the first minute regardless. Turning maintenance off restarts the grid timer. | Reporting, and removing shutdowns. A sensor that stops working must not keep the servers off unnoticed. |
+| A grid entity that no integration is providing says nothing and raises the problem sensor: one Home Assistant does not know at all (renamed, deleted), or one it has only restored as a placeholder after a restart because the owning integration has not loaded. A silent sensor cannot start a shutdown and cannot allow a restore or a wake. The second half matters after a Home Assistant restart in the middle of an outage: the wall charger has no power, its integration cannot load, and the servers must not come back on the DPU. If the group has been off for six hours with UPS input present and no evidence of the grid in all that time, the problem sensor turns on. That six-hour timer is not stored and restarts with Home Assistant, after an unreadable stretch, and whenever the sensor reads up once; `waiting_for_grid` says why from the first minute regardless. Turning maintenance off restarts the grid timer. | Reporting, and removing shutdowns. A sensor that stops working must not keep the servers off unnoticed. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives
 this code through random outages. Unlike the model, its UPS reports runtime

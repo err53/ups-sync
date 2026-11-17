@@ -54,10 +54,15 @@ class Obs:
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
-    # Optional grid sensor: True when the grid looks down even though the UPS
-    # may still have input (an upstream battery is carrying it). It can be
-    # wrong in either direction; nothing unsafe may follow from that.
+    # Optional grid sensor, for a UPS that still has input during an outage
+    # because a battery upstream is carrying it. It can be wrong in either
+    # direction; nothing unsafe may follow from that. Two separate facts,
+    # because the sensor may also say nothing at all:
+    #   grid_down  there is evidence the grid is down  -> may start a shutdown
+    #   grid_ok    there is evidence the grid is up     -> may restore or wake
+    # With no sensor configured: grid_down False, grid_ok True.
     grid_down: bool = False
+    grid_ok: bool = True
 
 
 @dataclass
@@ -65,6 +70,7 @@ class State:
     ctl: str = IDLE
     ob_since: float | None = None
     grid_since: float | None = None
+    no_grid_since: float | None = None  # CUT, UPS has input, grid not confirmed
     hold_since: float | None = None
     dark_since: float | None = None  # SHUTDOWN only
     partial_since: float | None = None
@@ -165,9 +171,9 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
 
     Idle: every server silent for t_dead, yet the guard refuses the cycle.
     Cut: for hours the UPS has had input, yet no restore: the reserve still
-    falls short, or the grid sensor has read down all that time. The second
-    may be a real long outage or a sensor that has stopped working; either
-    way a person should know.
+    falls short, or the grid sensor has not confirmed the grid in all that
+    time. The second may be a real long outage or a sensor that has stopped
+    working; either way a person should know.
     """
     if st.ctl == IDLE:
         return (
@@ -178,7 +184,7 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
         )
     return st.ctl == CUT and (
         _held(st.hold_since, mono, RESTORE_OVERDUE)
-        or (obs.input_present and _held(st.grid_since, mono, RESTORE_OVERDUE))
+        or _held(st.no_grid_since, mono, RESTORE_OVERDUE)
     )
 
 
@@ -211,6 +217,7 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     if st.last_obs is not None and mono - st.last_obs > MAX_GAP:
         # Nobody was watching. Nothing has "held" across the gap.
         st.ob_since = st.grid_since = st.hold_since = st.dark_since = None
+        st.no_grid_since = None
         st.partial_since = st.seen_dark_since = None
     st.last_obs = mono
 
@@ -227,8 +234,11 @@ def observe(st: State, obs: Obs, mono: float, wall: float) -> None:
     st.grid_since = _since(obs.grid_down, st.grid_since, mono)
     # "Power is back" means UPS input from the grid, not from a battery upstream.
     st.hold_since = _since(
-        obs.input_present and not obs.grid_down and st.ctl != IDLE,
-        st.hold_since,
+        obs.input_present and obs.grid_ok and st.ctl != IDLE, st.hold_since, mono
+    )
+    st.no_grid_since = _since(
+        st.ctl == CUT and obs.input_present and not obs.grid_ok,
+        st.no_grid_since,
         mono,
     )
     st.seen_dark_since = _since(dark, st.seen_dark_since, mono)
@@ -290,7 +300,7 @@ def decide(
         if (
             _held(st.partial_since, mono, p.t_wake)
             and obs.input_present
-            and not obs.grid_down
+            and obs.grid_ok
             and _enough_reserve(obs, p)
         ):
             for name, s in obs.servers.items():

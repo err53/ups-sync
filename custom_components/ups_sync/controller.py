@@ -167,7 +167,7 @@ class Controller:
             "calibrated": self.calibrated,
             "stuck_servers_off": self.stuck,
             "waiting_for_grid": bool(
-                self.obs and self.obs.grid_down and self.state.ctl == CUT
+                self.obs and not self.obs.grid_ok and self.state.ctl == CUT
             ),
             "grid_entities_missing": self.grid_missing,
             "group_command_failed": self.group_cmd_failed,
@@ -188,28 +188,34 @@ class Controller:
         "every server up and settled" stretch starts again."""
         self._up_since = self._prev_sample = self._prev_load = None
 
-    def _grid_down(self) -> bool:
-        """True when none of the configured grid entities shows life.
+    def _grid(self) -> tuple[bool, bool]:
+        """(grid_down, grid_ok) from the configured grid entities.
 
         Each should be something that only works on grid power, such as a
         wall charger's voltage sensor. One entity that is available, not
-        "off" and not zero is enough to call the grid up. With none
-        configured the feature is off.
+        "off" and not zero is evidence the grid is up. Evidence that it is
+        down needs every entity an integration is actually providing to
+        show no life. With none configured the feature is off.
 
-        An entity that no integration is providing is no evidence either way
-        and is left out: one Home Assistant does not know at all (renamed,
-        deleted), or one it only remembers from before a restart. For the
-        latter it writes a placeholder "unavailable" state marked `restored`
-        until the owning integration has loaded. Those entities are listed
-        in `grid_entities_missing` and raise the problem sensor.
+        An entity that no integration is providing says nothing: one Home
+        Assistant does not know at all (renamed, deleted), or one it only
+        remembers from before a restart. For the latter it writes a
+        placeholder "unavailable" state marked `restored` until the owning
+        integration has loaded. Saying nothing can neither start a shutdown
+        nor allow a restore. Such entities are listed in
+        `grid_entities_missing` and raise the problem sensor.
         """
+        if not self.grid_entities:
+            self.grid_missing = []
+            return False, True
         states = [self.hass.states.get(e) for e in self.grid_entities]
         live = [s is not None and not s.attributes.get(ATTR_RESTORED) for s in states]
         self.grid_missing = [
             e for e, ok in zip(self.grid_entities, live, strict=True) if not ok
         ]
         known = [s for s, ok in zip(states, live, strict=True) if ok]
-        return bool(known) and not any(self._shows_grid(s.state) for s in known)
+        up = any(self._shows_grid(s.state) for s in known)
+        return bool(known) and not up, up
 
     @staticmethod
     def _shows_grid(state: str) -> bool:
@@ -239,6 +245,7 @@ class Controller:
         self._prev_sample = sample
         # The lower of the last two loads, in case the runtime figure lags.
         load_for_reserve = min(self._prev_load or ups.load_w, ups.load_w)
+        grid_down, grid_ok = self._grid()
         self._prev_load = ups.load_w
         return Obs(
             input_present=ups.input_present,
@@ -252,7 +259,8 @@ class Controller:
                 name: ServerObs(probes[i], probes[n + i])
                 for i, name in enumerate(self.servers)
             },
-            grid_down=self._grid_down(),
+            grid_down=grid_down,
+            grid_ok=grid_ok,
         )
 
     async def async_step(self, _now=None) -> None:
