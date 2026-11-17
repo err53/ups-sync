@@ -15,6 +15,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     set_cmd,
 )
 from pysnmp.proto.rfc1902 import Integer32
+from pysnmp.proto.rfc1905 import EndOfMibView, NoSuchInstance, NoSuchObject
 from pysnmp.smi import view
 
 _APC = "1.3.6.1.4.1.318.1.1.1"
@@ -128,12 +129,14 @@ class ApcClient:
                 ContextData(),
                 ObjectType(ObjectIdentity(f"{OID_GROUP_NAME}.{self._group}")),
             )
+            if err_ind or err_status:
+                return ""
+            value = binds[0][1]
+            if isinstance(value, (NoSuchObject, NoSuchInstance, EndOfMibView)):
+                return ""
+            return value.prettyPrint().strip()
         except Exception:  # the name is a courtesy; never fail setup over it
             return ""
-        if err_ind or err_status or not binds:
-            return ""
-        name = binds[0][1].prettyPrint().strip()
-        return "" if name.lower().startswith("no such") else name
 
     async def set_group(self, on: bool) -> None:
         try:
