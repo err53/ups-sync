@@ -88,6 +88,7 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._data: dict = {}
+        self._group_name = ""
 
     async def async_step_user(self, user_input=None):
         errors = {}
@@ -97,14 +98,16 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             engine = await self.hass.async_add_executor_job(make_engine)
+            ups = ApcClient(
+                engine,
+                user_input[CONF_HOST],
+                user_input[CONF_READ_COMMUNITY],
+                user_input[CONF_WRITE_COMMUNITY],
+                user_input[CONF_GROUP],
+            )
             try:
-                await ApcClient(
-                    engine,
-                    user_input[CONF_HOST],
-                    user_input[CONF_READ_COMMUNITY],
-                    user_input[CONF_WRITE_COMMUNITY],
-                    user_input[CONF_GROUP],
-                ).read()
+                await ups.read()
+                self._group_name = await ups.group_name()
             except UpsError:
                 errors["base"] = "cannot_connect"
             finally:
@@ -139,12 +142,25 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                 if more:
                     return await self.async_step_server()
                 return self.async_create_entry(
-                    title=f"UPS {self._data[CONF_HOST]} group {self._data[CONF_GROUP]}",
+                    title=f"UPS {self._data[CONF_HOST]} group {self._group_label()}",
                     data=self._data,
                 )
+        added = [s[CONF_NAME] for s in self._data[CONF_SERVERS]]
         return self.async_show_form(
-            step_id="server", data_schema=SERVER_SCHEMA, errors=errors
+            step_id="server",
+            data_schema=SERVER_SCHEMA,
+            errors=errors,
+            description_placeholders={
+                "host": self._data[CONF_HOST],
+                "group": self._group_label(),
+                "added": ", ".join(added) if added else "none yet",
+            },
         )
+
+    def _group_label(self) -> str:
+        """For example: 2 "Servers"."""
+        number = str(self._data[CONF_GROUP])
+        return f'{number} "{self._group_name}"' if self._group_name else number
 
     @staticmethod
     @callback

@@ -61,6 +61,33 @@ async def test_set_group_writes_immediate_on_or_off_to_that_group_only(on, value
     assert community == "private" and oid == f"{APC}.12.3.2.1.3.3" and int(written) == value
 
 
+async def test_group_name_is_read_from_the_card_and_never_fails():
+    seen = []
+
+    class Name:
+        def prettyPrint(self):
+            return "Servers "
+
+    async def get_cmd(engine, community, target, context, *objects):
+        seen.extend(_oid_and_value(o)[0] for o in objects)
+        return None, None, 0, [(None, Name())]
+
+    async def broken(*a):
+        raise OSError("network down")
+
+    async def timeout(*a):
+        return "timeout", None, 0, []
+
+    client = snmp.ApcClient(None, "h", "public", "private", 2)
+    with patch.object(snmp.ApcClient, "_target", _target):
+        with patch.object(snmp, "get_cmd", get_cmd):
+            assert await client.group_name() == "Servers"
+        assert seen == [f"{APC}.12.2.2.1.2.2"]
+        for fake in (broken, timeout):
+            with patch.object(snmp, "get_cmd", fake):
+                assert await client.group_name() == ""
+
+
 async def test_snmp_errors_become_ups_errors():
     async def timeout(*a):
         return "No SNMP response received before timeout", None, 0, []
