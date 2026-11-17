@@ -393,6 +393,13 @@ async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, r
     assert attrs["grid_entities_missing"] == ["sensor.typo", "sensor.late"]
     assert ctl.problem  # Home Assistant is running: they should exist by now
 
+    # After a restart Home Assistant writes a placeholder "unavailable" state
+    # for an entity whose integration has not loaded yet. Still no evidence.
+    hass.states.async_set("sensor.late", "unavailable", {"restored": True})
+    await rig.run(ctl, 900)
+    assert not ctl.obs.grid_down and rig.calls == []
+    assert ctl.grid_missing == ["sensor.typo", "sensor.late"] and ctl.problem
+
     # One loads late and shows the grid up: fine. The typo still warns.
     hass.states.async_set("sensor.late", "240")
     await rig.run(ctl, 15)

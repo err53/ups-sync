@@ -10,7 +10,12 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from homeassistant.components import persistent_notification
-from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    ATTR_RESTORED,
+    STATE_OFF,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
@@ -191,15 +196,19 @@ class Controller:
         "off" and not zero is enough to call the grid up. With none
         configured the feature is off.
 
-        An entity Home Assistant does not know at all (not loaded yet, since
-        renamed or deleted) is no evidence either way and is left out. It is
-        listed in `grid_entities_missing` and raises the problem sensor.
+        An entity that no integration is providing is no evidence either way
+        and is left out: one Home Assistant does not know at all (renamed,
+        deleted), or one it only remembers from before a restart. For the
+        latter it writes a placeholder "unavailable" state marked `restored`
+        until the owning integration has loaded. Those entities are listed
+        in `grid_entities_missing` and raise the problem sensor.
         """
         states = [self.hass.states.get(e) for e in self.grid_entities]
+        live = [s is not None and not s.attributes.get(ATTR_RESTORED) for s in states]
         self.grid_missing = [
-            e for e, s in zip(self.grid_entities, states, strict=True) if s is None
+            e for e, ok in zip(self.grid_entities, live, strict=True) if not ok
         ]
-        known = [s for s in states if s is not None]
+        known = [s for s, ok in zip(states, live, strict=True) if ok]
         return bool(known) and not any(self._shows_grid(s.state) for s in known)
 
     @staticmethod
