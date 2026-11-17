@@ -29,4 +29,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          ignore: brands
+          # brands and license are only required for the HACS default store,
+          # which this repository is not meant for.
+          ignore: brands license
