@@ -1,0 +1,235 @@
+"""Randomised outage simulator driving the real controller logic.
+
+A Python port of the environment in formal/UpsSync2.tla, in real seconds
+instead of 2-minute ticks: adversarial input loss, HA crashes, the card's
+own load shed and auto-return, server NUT backstops, variable shutdown and
+boot times, ping dying before power-off, iDRAC sometimes silent, and
+(optionally) failing commands and humans pressing power buttons.
+
+Checked on every step: no server loses power unless it is off (NoHardCut),
+shutdown is only ever started on battery (NoSpurious). Checked at the end:
+once power and HA stay up, every server a human did not turn off is running.
+
+UPS_SYNC_SIM_SEEDS=<n> runs more seeds.
+"""
+
+import os
+import random
+
+import pytest
+
+from custom_components.ups_sync.machine import (
+    IDLE,
+    Obs,
+    Params,
+    ServerObs,
+    State,
+    cut_guard,
+    decide,
+    observe,
+)
+
+DT = 15
+E_MAX, E_LB, E_SHED, E_RETURN = 57.0, 16.0, 6.0, 30.0
+BASE_W, SERVER_W, STANDBY_W = 150, 120, 10
+P = Params(load_idle_max=BASE_W + 2 * STANDBY_W + 40)
+NAMES = ("f", "s")
+
+
+class HardCut(AssertionError):
+    pass
+
+
+class World:
+    def __init__(self, seed: int, humans: bool, cmd_fail: float) -> None:
+        self.r = random.Random(seed)
+        self.humans, self.cmd_fail = humans, cmd_fail
+        self.t = 0
+        self.e = E_MAX
+        self.input = True
+        self.input_until = self.r.randint(600, 7200)
+        self.group, self.by_card = True, False
+        self.srv = dict.fromkeys(NAMES, "RUN")
+        self.timer = dict.fromkeys(NAMES, 0)
+        self.tail = dict.fromkeys(NAMES, 0)
+        self.srv_ob = dict.fromkeys(NAMES, 0)
+        self.manual: set[str] = set()
+        self.ha_down_until = 0
+        self.st = State()
+        self.alarms = 0
+        self.settling = False
+
+    # ---- what the controller can see ------------------------------------
+
+    def powered(self) -> bool:
+        return self.group and (self.input or self.e > 0)
+
+    def obs(self) -> Obs:
+        powered = self.powered()
+        servers = {}
+        load = BASE_W
+        for n in NAMES:
+            state = self.srv[n]
+            if powered:
+                load += STANDBY_W if state == "OFF" else SERVER_W
+            reach = powered and (
+                state == "RUN" or (state == "SHUT" and self.timer[n] > self.tail[n])
+            )
+            idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
+            servers[n] = ServerObs(reach, idrac)
+        return Obs(
+            input_present=self.input,
+            on_battery=not self.input,
+            low_battery=not self.input and self.e < E_LB,
+            runtime_min=self.e,
+            load_w=load,
+            group_on=self.group,
+            servers=servers,
+        )
+
+    # ---- server state changes --------------------------------------------
+
+    def begin_shutdown(self, n: str) -> None:
+        self.srv[n] = "SHUT"
+        self.timer[n] = self.r.randint(120, 480)
+        self.tail[n] = self.r.randint(0, 120)
+
+    def begin_boot(self, n: str) -> None:
+        self.srv[n] = "BOOT"
+        self.timer[n] = self.r.randint(120, 360)
+
+    def set_group(self, on: bool, by_card: bool) -> None:
+        was = self.powered()
+        self.group, self.by_card = on, by_card
+        self.power_edge(was)
+
+    def power_edge(self, was: bool) -> None:
+        now = self.powered()
+        for n in NAMES:
+            if was and not now and self.srv[n] != "OFF":
+                raise HardCut(f"t={self.t}s {n} lost power while {self.srv[n]}")
+            if now and not was and self.srv[n] == "OFF":
+                self.begin_boot(n)  # BIOS restore on AC
+                self.manual.discard(n)
+
+    # ---- one step ---------------------------------------------------------
+
+    def controller(self) -> None:
+        o = self.obs()
+        observe(self.st, o, self.t, self.t)
+        for act in decide(self.st, o, self.t, self.t, P, False):
+            failed = self.r.random() < self.cmd_fail
+            if act.kind == "shutdown":
+                assert o.on_battery or self.st.shutdown_since != self.t, "spurious"
+                if not failed:
+                    self.st.acked.add(act.server)
+                    if self.srv[act.server] == "RUN":
+                        self.begin_shutdown(act.server)
+            elif act.kind == "cut" and not failed:
+                assert cut_guard(o, P)
+                self.set_group(False, by_card=False)
+            elif act.kind == "restore" and not failed:
+                self.set_group(True, by_card=False)
+            elif act.kind == "wake" and not failed:
+                if self.powered() and self.srv[act.server] == "OFF":
+                    self.begin_boot(act.server)
+            elif act.kind == "alarm":
+                self.alarms += 1
+
+    def step(self) -> None:
+        r = self.r
+        # Environment: input, HA crashes.
+        if not self.settling:
+            if self.t >= self.input_until:
+                was = self.powered()
+                self.input = not self.input
+                long = r.random() < 0.3
+                self.input_until = self.t + (
+                    r.randint(1800, 14400) if long else r.randint(15, 900)
+                )
+                self.power_edge(was)
+            if r.random() < 1 / 1500:
+                self.ha_down_until = self.t + r.randint(30, 900)
+                self.st = State(dead_since=self.st.dead_since)  # restart
+        if not (self.input or self.e > 0):
+            self.ha_down_until = max(self.ha_down_until, self.t + 120)
+
+        if self.t >= self.ha_down_until:
+            self.controller()
+
+        # Server NUT backstops, polling the card directly.
+        for n in NAMES:
+            if self.input:
+                self.srv_ob[n] = 0
+            elif self.powered():
+                self.srv_ob[n] += DT
+                if self.srv[n] == "RUN" and (self.e < E_LB or self.srv_ob[n] >= 600):
+                    self.begin_shutdown(n)
+
+        # Card: load shed, and return after min return runtime.
+        if self.group and not self.input and self.e < E_SHED:
+            self.set_group(False, by_card=True)
+        elif not self.group and self.input and self.e >= E_RETURN:
+            if self.by_card or (not self.settling and r.random() < 0.01):
+                self.set_group(True, by_card=True)
+
+        # Humans, within the documented assumptions.
+        if self.humans and not self.settling and self.input and self.e >= P.e_restore:
+            if r.random() < 1 / 400:
+                n = r.choice(NAMES)
+                if self.srv[n] == "RUN":
+                    self.begin_shutdown(n)
+                    self.manual.add(n)
+                elif self.srv[n] == "OFF" and self.powered():
+                    self.begin_boot(n)
+                    self.manual.discard(n)
+
+        # Physics.
+        was = self.powered()
+        if self.input:
+            self.e = min(E_MAX, self.e + 0.5 * DT / 60)
+        else:
+            busy = self.powered() and any(s != "OFF" for s in self.srv.values())
+            self.e = max(0.0, self.e - (1.0 if busy else 0.5) * DT / 60)
+            if self.e == 0 and self.group:
+                self.by_card = True  # card holds the group off after UPS death
+                self.group = False
+        self.power_edge(was)
+        for n in NAMES:
+            if self.srv[n] in ("SHUT", "BOOT") and self.powered():
+                self.timer[n] -= DT
+                if self.timer[n] <= 0:
+                    self.srv[n] = "OFF" if self.srv[n] == "SHUT" else "RUN"
+        self.t += DT
+
+
+def run(seed: int, humans: bool = False, cmd_fail: float = 0.0, hours: int = 16) -> World:
+    w = World(seed, humans, cmd_fail)
+    while w.t < hours * 3600:
+        w.step()
+    # Settle: power and HA stay up, nobody interferes.
+    w.settling = True
+    was = w.powered()
+    w.input = True
+    w.power_edge(was)
+    for _ in range(4 * 3600 // DT):
+        w.step()
+    return w
+
+
+SEEDS = range(int(os.environ.get("UPS_SYNC_SIM_SEEDS", "40")))
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_no_hard_cut_and_recovery(seed):
+    w = run(seed)
+    assert w.alarms == 0, "alarm fired without human interference"
+    assert all(s == "RUN" for s in w.srv.values()), w.srv
+    assert w.st.ctl == IDLE and w.group
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_no_hard_cut_with_humans_and_failing_commands(seed):
+    w = run(seed, humans=True, cmd_fail=0.3)
+    assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
+    assert w.group

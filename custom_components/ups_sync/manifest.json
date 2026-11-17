@@ -1,0 +1,13 @@
+{
+  "domain": "ups_sync",
+  "name": "UPS sync",
+  "codeowners": ["@err53"],
+  "config_flow": true,
+  "dependencies": ["persistent_notification"],
+  "documentation": "https://github.com/err53/ups-sync",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/err53/ups-sync/issues",
+  "requirements": ["pysnmp>=7.1.21,<8"],
+  "version": "0.1.0"
+}

@@ -1,0 +1,73 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "APC UPS",
+        "description": "The Network Management Card and the outlet group that powers the servers.",
+        "data": {
+          "host": "UPS host",
+          "read_community": "SNMP read community",
+          "write_community": "SNMP write community",
+          "group": "Outlet group number"
+        }
+      },
+      "server": {
+        "title": "Server on this outlet group",
+        "description": "Each server needs at least one shutdown channel: an iDRAC, a Proxmox API token, or both.",
+        "data": {
+          "name": "Name",
+          "host": "Host",
+          "reach_port": "TCP port that answers while the OS is up",
+          "idrac_host": "iDRAC host",
+          "idrac_user": "iDRAC user (Operator role)",
+          "idrac_password": "iDRAC password",
+          "pve_node": "Proxmox node name",
+          "pve_token": "Proxmox API token (user@realm!tokenid=secret)",
+          "add_another": "Add another server after this one"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The UPS did not answer over SNMP.",
+      "no_channel": "Give an iDRAC host, or a Proxmox node and token.",
+      "duplicate_name": "A server with this name was already added.",
+      "idrac_failed": "The iDRAC did not answer with these credentials."
+    },
+    "abort": {
+      "already_configured": "This UPS outlet group is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "UPS sync settings",
+        "description": "Times are in seconds. The controller never cuts power until the idle load is set.",
+        "data": {
+          "load_idle_max": "UPS output (W) at or below which the servers are certainly off",
+          "notify_services": "Notify services, comma separated (for example notify.mobile_app_phone)",
+          "t_ob": "On battery this long before shutdown starts",
+          "t_grace": "Wait after the last server goes quiet before cutting",
+          "t_dead": "Wait before cutting when servers went off on their own",
+          "t_wake": "Wait before powering on a server that is off while another is up",
+          "t_hold": "Input stable this long before restore",
+          "t_off": "Keep the group off at least this long before restore",
+          "t_wait": "Alarm if shutdown takes longer than this",
+          "e_restore": "UPS runtime (minutes) required before restore"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "State",
+        "state": { "idle": "Idle", "shutdown": "Shutting down", "cut": "Power cut" }
+      }
+    },
+    "binary_sensor": { "problem": { "name": "Problem" } },
+    "switch": {
+      "armed": { "name": "Armed" },
+      "maintenance": { "name": "Maintenance" }
+    }
+  }
+}
