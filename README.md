@@ -2,9 +2,25 @@
 
 # ups-sync
 
-A Home Assistant integration that shuts servers down cleanly when an APC UPS
-loses input, cuts their outlet group once they are off, and brings them back
-when power is stable. Everything else on the UPS keeps running.
+A Home Assistant integration that keeps servers on an APC UPS in step with
+a whole-home battery backup, such as an EcoFlow Delta Pro Ultra.
+
+In a grid outage the home battery carries the house, and the UPS behind it
+never notices: it still has input, so the servers keep running and drain
+the battery that everything else depends on. This integration watches for
+the grid going down, shuts the servers down cleanly, cuts their outlet
+group once they are off, and brings them back when the grid has returned.
+The network gear and anything else on the UPS's other outlets keeps
+running throughout.
+
+```
+grid ──► home battery ──► APC UPS ──┬─► outlet group "Critical": network, Home Assistant   (stays on)
+                                    └─► outlet group "Servers":  NAS, hypervisor           (shut down, cut, restored)
+```
+
+It also covers the case where the home battery runs out, or where there is
+none: when the UPS itself goes on battery, the servers are shut down the
+same way.
 
 It talks to the APC Network Management Card over SNMP, to each server's
 iDRAC over Redfish, and optionally to Proxmox over its API. The controller
@@ -16,9 +32,9 @@ written; see [docs/STATE_MACHINE.md](docs/STATE_MACHINE.md) and
 
 | State | Meaning | Leaves when |
 | --- | --- | --- |
-| Idle | group on | on battery for 2 min, or low battery: shut the servers down |
+| Idle | group on | grid down for 5 min, UPS on battery for 2 min, or low battery: shut the servers down |
 | Shutting down | servers told to power off | all servers are off and the UPS load confirms it: cut the group |
-| Power cut | group off | input stable for 6 min and enough charge to run every server for 26 min: turn the group on |
+| Power cut | group off | grid back and UPS input stable for 6 min, with enough charge to run every server for 26 min: turn the group on |
 
 Two extra rules run while idle. If every server is off but the outlets are
 live, the group is power-cycled so the servers boot. If one server is off
@@ -27,14 +43,14 @@ while another is up, that server is powered on through its iDRAC.
 Power is only ever cut when no server answers, no iDRAC reports power on,
 and the UPS output is at or below the calibrated idle load.
 
-### With a battery upstream of the UPS
+### Following the home battery
 
-If the UPS is fed through a home battery, an outage does not put the UPS on
-battery until the home battery is empty, so by default the servers run it
-down. To shut them down early and keep that battery for everything else,
-give the integration one or more **grid entities** in its options: things
-that only work while the grid is up, such as a wall charger's voltage
-sensor. When none of them shows life for five minutes, the servers are shut
+The UPS cannot tell grid power from home-battery power, and the integration
+does not talk to the home battery. It learns that the grid is down from one
+or more **grid entities** you choose in its options: things in Home
+Assistant that only work while the grid is up, such as the voltage sensor
+of a wall charger wired ahead of the home battery. Without any, only the
+UPS going on battery starts a shutdown. When none of them shows life for five minutes, the servers are shut
 down and their group is cut even though the UPS still has input, and the
 group is not restored until one shows life again.
 
