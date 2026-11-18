@@ -149,6 +149,11 @@ def test_the_descriptions_use_this_installs_timings():
     ctl.params = Params(t_dead=1800, t_grace=2400)
     assert "has been off 40 min on live outlets" in describe(ctl, "armed")
     assert "and 40 min before the group is power-cycled" in describe(ctl, "maintenance")
+    # Equal times read as one sentence.
+    ctl.params = Params(t_wake=600, t_dead=600, t_grace=120)
+    assert "10 min before it is powered on or the group is power-cycled." in describe(
+        ctl, "maintenance"
+    )
 
 
 async def test_the_description_is_not_kept_in_history(hass, rig):
