@@ -32,7 +32,7 @@ async def test_read_asks_for_the_right_oids_in_order():
 
     async def get_cmd(engine, community, target, context, *objects):
         seen.extend(_oid_and_value(o)[0] for o in objects)
-        return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
+        return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1, 100)]
 
     with patch.object(snmp, "get_cmd", get_cmd), patch.object(snmp.ApcClient, "_target", _target):
         r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
@@ -42,8 +42,26 @@ async def test_read_asks_for_the_right_oids_in_order():
         f"{APC}.4.2.8.0",  # output watts
         f"{APC}.5.2.8.0",  # low-battery duration
         f"{APC}.12.1.2.1.3.2",  # state of group 2
+        f"{APC}.2.2.1.0",  # battery charge, optional
     ]
     assert r.runtime_min == 57 and r.load_w == 412 and r.group_on
+    assert r.charge_pct == 100
+
+
+async def test_a_card_without_a_charge_reading_still_reads():
+    from pysnmp.proto.rfc1905 import NoSuchObject
+
+    for last in ([(None, NoSuchObject())], []):
+
+        async def get_cmd(engine, community, target, context, *objects, last=last):
+            values = [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
+            return None, None, 0, values + last
+
+        with patch.object(snmp, "get_cmd", get_cmd), patch.object(
+            snmp.ApcClient, "_target", _target
+        ):
+            r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
+        assert r.charge_pct is None and r.runtime_min == 57 and r.group_on
 
 
 @pytest.mark.parametrize(("on", "value"), [(True, 1), (False, 2)])

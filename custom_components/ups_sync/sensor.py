@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTime
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfPower, UnitOfTime
 
 from .controller import Controller
 from .entity import UpsSyncEntity
@@ -34,6 +34,7 @@ SENSORS: tuple[tuple[str, Callable[[Controller], Any], bool, Any, Any, bool], ..
     ("load", _obs("load_w"), True, SensorDeviceClass.POWER, UnitOfPower.WATT, False),
     ("runtime", _obs("runtime_min"), True, SensorDeviceClass.DURATION, UnitOfTime.MINUTES, False),
     ("reserve", _obs("reserve_min"), True, SensorDeviceClass.DURATION, UnitOfTime.MINUTES, False),
+    ("battery_charge", lambda ctl: ctl.charge_pct, True, SensorDeviceClass.BATTERY, PERCENTAGE, False),
     ("peak_load", lambda ctl: ctl.peak, False, SensorDeviceClass.POWER, UnitOfPower.WATT, True),
     ("would_act", lambda ctl: _text("; ".join(ctl.would_act)), False, None, None, False),
     ("last_action", lambda ctl: _text(ctl.last_action), False, None, None, True),

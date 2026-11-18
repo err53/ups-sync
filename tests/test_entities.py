@@ -15,6 +15,7 @@ async def test_readings_are_sensors(hass, rig):
     assert state(hass, "sensor.ups_sync_ups_runtime_at_present_load") == "57.0"
     assert state(hass, "sensor.ups_sync_runtime_with_servers_on") == "57.0"
     assert state(hass, "sensor.ups_sync_peak_load") == "400.0"
+    assert state(hass, "sensor.ups_sync_ups_battery_charge") == "100.0"
     assert state(hass, "sensor.ups_sync_dry_run_would_do") == "Nothing"
     assert state(hass, "binary_sensor.ups_sync_calibrated") == "on"
     assert state(hass, "binary_sensor.ups_sync_ups_input") == "on"
@@ -90,3 +91,16 @@ async def test_grid_sensor_is_on_off_or_unknown(hass, rig):
     hass.states.async_remove("sensor.wall")
     await rig.run(ctl, 15)
     assert state(hass, "binary_sensor.ups_sync_grid") == "unknown"
+
+
+async def test_battery_charge_follows_the_card_and_is_unknown_without_it(hass, rig):
+    ctl = await setup(hass, rig)
+    rig.set(charge_pct=74.0)
+    await rig.run(ctl, 15)
+    assert state(hass, "sensor.ups_sync_ups_battery_charge") == "74.0"
+    rig.set(charge_pct=None)  # a card that does not report it
+    await rig.run(ctl, 15)
+    assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unknown"
+    rig.read_error = "timeout"
+    await rig.run(ctl, 15)
+    assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unavailable"

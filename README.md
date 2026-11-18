@@ -86,6 +86,7 @@ and reports what it would do.
 | `switch.ups_sync_armed` | off: observe only. on: act. |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Outage shutdown still works. |
 | UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
+| UPS battery charge | the card's charge reading, for display only; unknown on a card that does not report it |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
 | `<server>` reachable, `<server>` power | per server: answers on the network, chassis powered (from the iDRAC) |
 | Calibrated | on once the peak load is learned and the idle load is set |

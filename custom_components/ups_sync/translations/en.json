@@ -88,6 +88,9 @@
       },
       "last_error": {
         "name": "Last error"
+      },
+      "battery_charge": {
+        "name": "UPS battery charge"
       }
     },
     "binary_sensor": {
