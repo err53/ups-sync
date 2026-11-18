@@ -66,6 +66,7 @@ class Controller:
         self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
+        self._read_ok = False  # the latest poll got a UPS reading
         self.armed = False
         self.maintenance = False
         self.would_act: list[str] = []
@@ -136,6 +137,13 @@ class Controller:
     @property
     def stale(self) -> bool:
         return self.last_ok is None or time.monotonic() - self.last_ok > STALE_SECONDS
+
+    @property
+    def fresh(self) -> bool:
+        """The readings are current enough to show: the latest poll got
+        them, and polling has not stalled. Display only; decisions use
+        `stale`, which tolerates a few missed polls."""
+        return self._read_ok and not self.stale
 
     @property
     def problem(self) -> bool:
@@ -275,11 +283,13 @@ class Controller:
                 # No reading, no decision. Timers hold; the alarm sensor
                 # turns on once the reading is STALE_SECONDS old.
                 self.last_error = f"UPS: {exc}"
+                self._read_ok = False
                 _LOGGER.warning("UPS read failed: %s", exc)
                 self._forget_settling()
                 self._notify_listeners()
                 return
             self.obs = obs
+            self._read_ok = True
             self.last_ok = time.monotonic()
             await self._decide_and_act(obs)
             await self._save_if_changed()

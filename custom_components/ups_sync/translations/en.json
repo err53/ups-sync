@@ -62,13 +62,70 @@
     "sensor": {
       "state": {
         "name": "State",
-        "state": { "idle": "Idle", "shutdown": "Shutting down", "cut": "Power cut" }
+        "state": {
+          "idle": "Idle",
+          "shutdown": "Shutting down",
+          "cut": "Power cut"
+        }
+      },
+      "load": {
+        "name": "UPS load"
+      },
+      "runtime": {
+        "name": "UPS runtime at present load"
+      },
+      "reserve": {
+        "name": "Runtime with servers on"
+      },
+      "peak_load": {
+        "name": "Peak load"
+      },
+      "would_act": {
+        "name": "Dry run would do"
+      },
+      "last_action": {
+        "name": "Last action"
+      },
+      "last_error": {
+        "name": "Last error"
       }
     },
-    "binary_sensor": { "problem": { "name": "Problem" } },
+    "binary_sensor": {
+      "problem": {
+        "name": "Problem"
+      },
+      "calibrated": {
+        "name": "Calibrated"
+      },
+      "input": {
+        "name": "UPS input"
+      },
+      "on_battery": {
+        "name": "On battery"
+      },
+      "low_battery": {
+        "name": "Low battery"
+      },
+      "group": {
+        "name": "Outlet group"
+      },
+      "grid": {
+        "name": "Grid"
+      },
+      "server_reachable": {
+        "name": "{server} reachable"
+      },
+      "server_power": {
+        "name": "{server} power"
+      }
+    },
     "switch": {
-      "armed": { "name": "Armed" },
-      "maintenance": { "name": "Maintenance" }
+      "armed": {
+        "name": "Armed"
+      },
+      "maintenance": {
+        "name": "Maintenance"
+      }
     }
   }
 }

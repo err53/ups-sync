@@ -16,24 +16,24 @@ Do these once, in order, when you can watch the servers.
    outlet never lost power. Then nothing restores the servers. Set it to
    `false` before cutting over.
 3. **Install and configure** the integration (see the README). Leave it
-   disarmed. `sensor.ups_sync_state` should read `idle` and its attributes
-   should show both servers reachable with `chassis_on: true`. After both
-   have been up for five minutes, `peak_load_w` is filled in. That is the
+   disarmed. The State sensor should read Idle, and each server's
+   "reachable" and "power" sensors should be on. After both have been up
+   for five minutes, the Peak load sensor is filled in. That is the
    heaviest UPS load seen while both servers were up and settled. The
    controller uses it to turn the UPS's runtime figure into "runtime with
    the servers on". It only ever rises.
-   If the integration is added while a server is off, `peak_load_w` stays
-   empty and the problem sensor stays on. Until both servers have been seen
+   If the integration is added while a server is off, Peak load stays
+   unknown and the problem sensor stays on. Until both servers have been seen
    running, nothing is power-cycled or restored. An outage still shuts the
    servers down and cuts the group, and the group then stays off until you
    turn it on by hand.
    To reset it (for example after a one-off heavy load on the UPS), remove
    the integration and add it again with both servers running.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
-   and leave them plugged in. Wait two minutes, read `load_w` from the state
-   sensor's attributes, add 40, and enter that as the idle load in the
-   integration's options. Power the servers back on. The `calibrated`
-   attribute should now be true and the problem sensor off.
+   and leave them plugged in. Wait two minutes, read the UPS load sensor,
+   add 40, and enter that as the idle load in the integration's options.
+   Power the servers back on. The Calibrated sensor should now be on and
+   the problem sensor off.
    - Estimate on 2026-11-17, before measuring: UPS 370 to 410 W total, the
      two servers 155 W and 112 W by their iDRACs, so roughly 160 W with both
      off and a setting near 200 W. One running server adds at least 110 W.
@@ -44,7 +44,7 @@ Do these once, in order, when you can watch the servers.
    reads that value from the card, so there is nothing to change in its
    options.
 6. **Dry run.** With the servers back up, pull the UPS input for three
-   minutes. The state sensor's `would_act` attribute should list a shutdown
+   minutes. The "Dry run would do" sensor should list a shutdown
    for each server after two minutes. Nothing should happen. Restore input.
 7. **Cut over.** `UPS_HOST=... TRUENAS_HOST=... TRUENAS_ADMIN=user:pass
    scripts/cutover.sh apply`. This moves the card to runtime-based load shed
@@ -54,16 +54,16 @@ Do these once, in order, when you can watch the servers.
    the servers should not run it down). In the integration's options, pick
    one or more entities that only work on grid power. Here that is
    `sensor.tesla_wall_connector_grid_voltage`, which had no gaps in two
-   weeks of history. Check `grid_down: false` in the state sensor's
-   attributes afterwards. With the transfer switch on the home battery and
+   weeks of history. Check that the Grid sensor is on
+   afterwards. With the transfer switch on the home battery and
    the controller still disarmed, switch the charger's breaker off for six
-   minutes: `would_act` should list a shutdown for each server.
+   minutes: "Dry run would do" should list a shutdown for each server.
 9. **Arm.** Turn on `switch.ups_sync_armed`.
 10. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
    both servers off within 8 more, group cut about 2 min after the last one
    goes quiet. Restore input. Expect the group back on 6 min later, provided
    the battery is above roughly 55 to 60 %, and both servers booting on
-   their own. The state sensor's `reserve_min` attribute must read 26 or
+   their own. The "Runtime with servers on" sensor must read 26 or
    more for the restore to happen.
    This is the first time either shutdown channel is used for real.
 11. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
