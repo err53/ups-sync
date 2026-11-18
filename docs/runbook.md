@@ -121,9 +121,10 @@ fits the 48 to 29 minute drop above.
 - Replace the battery by the card's date. Restores after an outage will
   then come sooner, and every runtime figure will be closer to the truth.
 - Afterwards, set the replacement date on the card, let the battery reach
-  100 %, and run the card's runtime calibration. That discharges the
-  battery deeply under the present load, so do it with Maintenance on and
-  the servers shut down, or with them on another supply.
+  100 %, and run the card's runtime calibration, following APC's
+  instructions for the load it needs. It discharges the battery deeply, so
+  an outage during or soon after it would find little left: turn
+  Maintenance on and pick a time when that would not matter.
 
 ## Maintenance
 
