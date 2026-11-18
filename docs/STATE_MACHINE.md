@@ -35,25 +35,58 @@ itself, and the models are checked with a sensor that lies at will.
 
 ## 2. Controller states
 
+```mermaid
+stateDiagram-v2
+    state "IDLE (group 2 on)" as IDLE
+    state "SHUTDOWN (group 2 on)" as SHUTDOWN
+    state "CUT (group 2 off)" as CUT
+
+    [*] --> IDLE: first UPS reading, group 2 on
+    [*] --> CUT: first UPS reading, group 2 off
+    IDLE --> SHUTDOWN: low battery, on battery T_OB,<br/>or grid down T_GS
+    SHUTDOWN --> CUT: cut guard, and either<br/>all acked + dark T_GRACE, or dark T_DEAD
+    SHUTDOWN --> IDLE: abort: power back T_HOLD and<br/>(nothing acked or alarm fired)
+    IDLE --> CUT: recover: cut guard,<br/>dark T_DEAD
+    CUT --> IDLE: restore: power back T_HOLD,<br/>reserve ≥ E_RESTORE
+
+    note right of IDLE
+        Wake: one server down, one up for T_WOL
+        → iDRAC power-on of the down one
+    end note
+    note right of SHUTDOWN
+        Retry servers that answer, at least 60 s apart
+        Alarm after T_WAIT if neither cut nor abort is allowed
+        Never a timeout cut
+    end note
 ```
-            ┌──────────────────────────────────────────────────────┐
-            │                                                      │
-            ▼            on battery ≥ T_OB, or LB                   │
-        ┌───────┐ ─────────────────────────────────► ┌──────────┐   │
-        │ IDLE  │                                    │ SHUTDOWN │   │
-        │ g2=on │ ◄──── reconcile: g2 observed on ── │  g2=on   │   │
-        └───────┘                                    └──────────┘   │
-            │  ▲                                          │         │
-            │  │ restore:                                 │ cut:    │
- recover:   │  │ input stable T_HOLD                      │ all dark, load low,
- all dark,  │  │ and runtime ≥ E_RESTORE                  │ (all acked and dark ≥ T_GRACE)
- load low,  │  │                                          │   or dark ≥ T_DEAD
- T_DEAD     ▼  │                                          ▼
-          ┌────────┐ ◄────── reconcile: g2 observed off ─────────────┘
-          │  CUT   │
-          │ g2=off │
-          └────────┘
-```
+
+`sensor.ups_sync_state` reports which state the controller is in. Reading
+the diagram:
+
+- **Power back** means UPS input present and, if a grid sensor is
+  configured, the sensor confirming the grid is up.
+- **Cut guard**: group 2 on, no server answers, no iDRAC reports power on,
+  and the UPS load at or below the configured idle-load limit.
+- **Grid down** starts a shutdown only outside maintenance, and only once
+  the idle-load limit is set and a peak load is known (section 8). The
+  on-battery and low-battery triggers have no such conditions.
+- **Recover** also needs a known peak load, and this process must have
+  watched the darkness itself for `T_GRACE`.
+- **Wake** also needs power back, reserve ≥ `E_RESTORE`, and the down
+  server's iDRAC reporting it off.
+- **Maintenance** blocks the grid-down trigger, recover, wake and restore.
+- **Cut and restore** are commands to the card. The state becomes CUT when
+  the card acknowledges the cut or the group is seen off. After a restore it
+  becomes IDLE only when the group is seen on.
+- **Not drawn**: the reconciliation rule below, which moves IDLE or SHUTDOWN
+  to CUT whenever group 2 is seen off, and CUT to IDLE whenever it is seen on.
+- **Disarmed**, the state is held at IDLE or CUT to match group 2, and
+  `would_act` shows what the controller would do from there; nothing is
+  sent.
+- Names are the model's. The defaults, all configurable: `T_OB` 2 min,
+  `T_GS` 5 min, `T_GRACE` 2 min, `T_DEAD` and `T_WOL` 10 min, `T_HOLD`
+  6 min, `T_WAIT` 24 min, `E_RESTORE` 26 min of runtime at the peak load
+  (section 7).
 
 **Reconciliation rule.** The controller state is anchored to the observable
 group 2 state. Group 2 off while in IDLE or SHUTDOWN forces CUT. Group 2 on
