@@ -1,4 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#ea580c"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="26" font-weight="600" fill="#ffffff">US</text>
+<!-- Same drawing as custom_components/ups_sync/brand/icon.png (scripts/make_icon.py). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048">
+  <rect width="2048" height="2048" rx="440" fill="#102a43"/>
+  <rect x="864" y="300" width="320" height="200" rx="60" fill="#f5f8fa"/>
+  <rect x="584" y="420" width="880" height="1340" rx="150" fill="#f5f8fa"/>
+  <rect x="694" y="530" width="660" height="1120" rx="70" fill="#102a43"/>
+  <polygon points="1130,640 800,1150 1010,1150 918,1540 1250,1020 1040,1020" fill="#ffbe28"/>
 </svg>
