@@ -53,6 +53,13 @@ async def test_dry_run_sensor_lists_what_would_be_done(hass, rig):
 async def test_readings_go_unavailable_when_the_ups_stops_answering(hass, rig):
     ctl = await setup(hass, rig, {"load_idle_max": 210})
     rig.read_error = "timeout"
+    await rig.run(ctl, 15)  # the first failed poll is enough
+    assert state(hass, "sensor.ups_sync_ups_load") == "unavailable"
+    assert state(hass, "binary_sensor.ups_sync_problem") == "off"  # not stale yet
+    rig.read_error = None
+    await rig.run(ctl, 15)
+    assert state(hass, "sensor.ups_sync_ups_load") == "400.0"
+    rig.read_error = "timeout"
     await rig.run(ctl, 195)
     for entity_id in (
         "sensor.ups_sync_ups_load",

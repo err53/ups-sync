@@ -73,7 +73,11 @@ class ReadingSensor(UpsSyncEntity, SensorEntity):
         self._attr_native_unit_of_measurement = unit
         if unit is not None:
             self._attr_state_class = SensorStateClass.MEASUREMENT
-            self._attr_suggested_display_precision = 0
+            # Minutes to one decimal: the restore threshold compares the
+            # exact value, so 25.6 must not show as 26.
+            self._attr_suggested_display_precision = (
+                1 if unit == UnitOfTime.MINUTES else 0
+            )
         if diagnostic:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
 

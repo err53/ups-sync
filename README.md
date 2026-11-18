@@ -74,8 +74,8 @@ and reports what it would do.
 | Calibrated | on once the peak load is learned and the idle load is set |
 | Dry run would do, Last action, Last error | what it would do while disarmed, and what it last did |
 
-Sensors that come from a UPS reading turn unavailable while the UPS cannot
-be read.
+Sensors that come from a UPS reading turn unavailable as soon as a poll of
+the UPS fails, and come back with the next good one.
 
 Every action also raises a persistent notification, fires a
 `ups_sync_action` event, and calls the notify services set in the options.
