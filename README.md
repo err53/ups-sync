@@ -68,6 +68,14 @@ and reports what it would do.
 | `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or calibration is incomplete |
 | `switch.ups_sync_armed` | off: observe only. on: act. |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Outage shutdown still works. |
+| UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
+| UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
+| `<server>` reachable, `<server>` power | per server: answers on the network, chassis powered (from the iDRAC) |
+| Calibrated | on once the peak load is learned and the idle load is set |
+| Dry run would do, Last action, Last error | what it would do while disarmed, and what it last did |
+
+Sensors that come from a UPS reading turn unavailable while the UPS cannot
+be read.
 
 Every action also raises a persistent notification, fires a
 `ups_sync_action` event, and calls the notify services set in the options.

@@ -138,6 +138,11 @@ class Controller:
         return self.last_ok is None or time.monotonic() - self.last_ok > STALE_SECONDS
 
     @property
+    def fresh(self) -> bool:
+        """The last set of readings exists and is recent enough to show."""
+        return self.obs is not None and not self.stale
+
+    @property
     def problem(self) -> bool:
         return (
             self.stale
