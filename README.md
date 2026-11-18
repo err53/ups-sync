@@ -77,14 +77,54 @@ home battery.
 It installs **disarmed**. Until you turn on the Armed switch it only watches
 and reports what it would do.
 
+## Armed and Maintenance
+
+The two switches on the device page. Home Assistant has no description
+field, so this section is linked from the device's "Visit" link, and each
+switch carries a short version under Attributes when you tap it.
+
+**Armed**
+
+- **On:** the integration acts on what it sees.
+  - Shuts the servers down after 2 minutes on UPS battery, at once on low
+    battery, or after 5 minutes of grid outage if grid entities are set.
+  - Cuts their outlet group once every server is off and the UPS load
+    confirms it.
+  - Turns the group back on once power has been back for 6 minutes and
+    "Runtime with servers on" reaches the restore reserve (26 by default).
+  - Powers on a server through its iDRAC if it has been off for 10 minutes
+    while another is running, once power and battery allow.
+  - Power-cycles the group if every server has been off for 10 minutes on
+    live outlets, so their BIOS powers them on.
+- **Off:** it only watches. Nothing is sent to the servers or the UPS.
+  "Dry run would do" lists what it would have done.
+
+**Maintenance**
+
+- **On:** for working on the servers by hand.
+  - Nothing is powered on: no restore, no wake, no power-cycle.
+  - A grid outage alone does not shut the servers down, so they can run on
+    the home battery.
+  - 2 minutes on UPS battery or low battery still shuts them down and cuts
+    the group. They then stay off until you turn them on or turn
+    Maintenance off.
+  - "Servers off and cannot be power-cycled" is not reported as a problem.
+- **Off:** normal operation. Turn it off when you are done. A server you
+  left off gets a fresh 10 minutes before it is powered on or the group is
+  power-cycled. A group that was cut while Maintenance was on is turned
+  back on as soon as power and battery allow, possibly at once.
+
+Only Armed decides whether anything is sent. Maintenance matters only while
+armed.
+
 ## Entities
 
 | Entity | Purpose |
 | --- | --- |
 | `sensor.ups_sync_state` | idle, shutdown, or cut. Attributes hold every reading and the dry-run plan. |
 | `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or calibration is incomplete |
-| `switch.ups_sync_armed` | off: observe only. on: act. |
-| `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Outage shutdown still works. |
+| `switch.ups_sync_armed` | off: observe only. on: act. See [Armed and Maintenance](#armed-and-maintenance). |
+| `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Shutdown on UPS battery still works. See [Armed and Maintenance](#armed-and-maintenance). |
 | UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
 | UPS battery charge | the card's charge reading, for display only; unknown on a card that does not report it |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |

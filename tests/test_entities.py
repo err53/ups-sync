@@ -104,3 +104,18 @@ async def test_battery_charge_follows_the_card_and_is_unknown_without_it(hass, r
     rig.read_error = "timeout"
     await rig.run(ctl, 15)
     assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unavailable"
+
+
+async def test_the_controls_explain_themselves(hass, rig):
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.ups_sync.const import CONTROLS_URL, DOMAIN
+
+    await setup(hass, rig)
+    for switch in ("armed", "maintenance"):
+        attrs = hass.states.get(f"switch.ups_sync_{switch}").attributes
+        assert len(attrs["description"]) > 100
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device.configuration_url == CONTROLS_URL
+    assert CONTROLS_URL.endswith("#armed-and-maintenance")
