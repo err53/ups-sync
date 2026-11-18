@@ -138,6 +138,10 @@ def test_the_descriptions_use_this_installs_timings():
     assert "20 min after the last one goes quiet" in armed
     assert "30 min after regardless, whichever comes first" in armed
     assert "fresh 1 min before it is powered on, and 30 min before" in maint
+    # The power-cycle waits the longer of the dead and grace times.
+    ctl.params = Params(t_dead=1800, t_grace=2400)
+    assert "has been off 40 min on live outlets" in describe(ctl, "armed")
+    assert "and 40 min before the group is power-cycled" in describe(ctl, "maintenance")
     assert "overdue for 6 h" in maint
     assert "grid" not in armed and "grid" not in maint
     assert "does not stop a shutdown already under way" in maint

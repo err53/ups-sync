@@ -23,6 +23,9 @@ def describe(ctl: Controller, key: str) -> str:
     """
     p = ctl.params
     grid = bool(ctl.grid_entities)
+    # The power-cycle needs the servers dark for t_dead and seen dark by
+    # this process for t_grace (decide(), DoRecov): the longer one counts.
+    cycle = max(p.t_dead, p.t_grace)
     restore = (
         f"after {_min(p.t_hold)} of UPS input"
         + (" with a grid entity showing the grid up" if grid else "")
@@ -47,7 +50,7 @@ def describe(ctl: Controller, key: str) -> str:
             f"{_min(p.t_wake)} while another runs, if the UPS has input"
             + (" and a grid entity shows the grid up" if grid else "")
             + f" and \"Runtime with servers on\" is at least {p.e_restore:g}. "
-            f"If every server has been off {_min(p.t_dead)} on live outlets, "
+            f"If every server has been off {_min(cycle)} on live outlets, "
             "cuts the group (once calibrated) so they boot when it is "
             "restored: turn on "
             "Maintenance before shutting them down by hand. "
@@ -72,8 +75,8 @@ def describe(ctl: Controller, key: str) -> str:
             f"A server left off gets a fresh {_min(p.t_wake)} before it is "
             "powered on"
             + (
-                f", and {_min(p.t_dead)} before the group is power-cycled."
-                if p.t_dead != p.t_wake
+                f", and {_min(cycle)} before the group is power-cycled."
+                if cycle != p.t_wake
                 else " or the group is power-cycled."
             )
         )
