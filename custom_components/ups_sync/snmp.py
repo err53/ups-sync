@@ -111,7 +111,6 @@ class ApcClient:
             OID_WATTS,
             OID_LOW_BATT,
             f"{OID_GROUP_STATE}.{self._group}",
-            OID_CHARGE,  # optional, display only
         )
         try:
             err_ind, err_status, _, binds = await get_cmd(
@@ -123,13 +122,25 @@ class ApcClient:
             )
         except Exception as exc:  # pysnmp raises many unrelated types
             raise UpsError(str(exc)) from exc
-        binds = list(binds or [])
-        values = self._check(err_ind, err_status, binds[: len(oids) - 1])
+        values = self._check(err_ind, err_status, binds)
+        return parse_reading(*values, await self._charge())
+
+    async def _charge(self) -> int | None:
+        """Battery charge, for display only. Asked for separately, so a card
+        that cannot answer it, in whatever way, never fails the reading the
+        controller acts on."""
         try:
-            charge = int(binds[-1][1]) if len(binds) == len(oids) else None
-        except Exception:  # noqa: BLE001  a card without the object: NoSuchObject
-            charge = None
-        return parse_reading(*values, charge)
+            err_ind, err_status, _, binds = await get_cmd(
+                self._engine,
+                self._read,
+                await self._target(),
+                ContextData(),
+                ObjectType(ObjectIdentity(OID_CHARGE)),
+            )
+            (value,) = self._check(err_ind, err_status, binds)
+        except Exception:  # noqa: BLE001  timeout, error status, NoSuchObject
+            return None
+        return value
 
     async def group_name(self) -> str:
         """The name the card gives this outlet group, or "" if it has none."""

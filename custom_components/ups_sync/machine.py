@@ -115,7 +115,10 @@ MAX_GAP = 120
 # the heaviest load seen while every server was up and running. That is the
 # model's unit, "minutes with every server running". Lead-acid runtime falls
 # faster than load rises; APC's own tables for this UPS give exponents of
-# 1.2 to 1.36, so 1.4 never overstates. The peak only ever goes up.
+# 1.2 to 1.36. On 2026-11-17 the real UPS's figure fell from 48 to 29 min
+# within two minutes on battery, an effective exponent of about 1.44 against
+# its on-mains figure, so 1.4 can overstate by a few per cent; e_restore's
+# margin covers that. The peak only ever goes up.
 #
 # Readings taken while a server is off or booting are left out on purpose.
 # Standby draw would understate the peak (restore too early). A boot surge
