@@ -50,9 +50,10 @@ does not talk to the home battery. It learns that the grid is down from one
 or more **grid entities** you choose in its options: things in Home
 Assistant that only work while the grid is up, such as the voltage sensor
 of a wall charger wired ahead of the home battery. Without any, only the
-UPS going on battery starts a shutdown. When none of them shows life for five minutes, the servers are shut
-down and their group is cut even though the UPS still has input, and the
-group is not restored until one shows life again.
+UPS going on battery starts a shutdown. When none of them shows life for
+five minutes, the servers are shut down and their group is cut even though
+the UPS still has input, and the group is not restored until one shows life
+again.
 
 Pick entities that are reliably available. If all of them drop out for some
 other reason, the servers are shut down cleanly and come back when one
