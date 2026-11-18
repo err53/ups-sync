@@ -116,6 +116,6 @@ async def test_the_controls_explain_themselves(hass, rig):
         attrs = hass.states.get(f"switch.ups_sync_{switch}").attributes
         assert len(attrs["description"]) > 100
     entry = hass.config_entries.async_entries(DOMAIN)[0]
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     assert device.configuration_url == CONTROLS_URL
     assert CONTROLS_URL.endswith("#armed-and-maintenance")
