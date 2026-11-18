@@ -18,8 +18,8 @@ class _Val:
         return self.v
 
 
-async def _target(self):
-    return "target"
+async def _target(self, timeout=2, retries=2):
+    return ("target", timeout, retries)
 
 
 def _oid_and_value(object_type):
@@ -32,7 +32,7 @@ async def test_read_asks_for_the_right_oids_in_order():
 
     async def get_cmd(engine, community, target, context, *objects):
         oids = [_oid_and_value(o)[0] for o in objects]
-        seen.append(oids)
+        seen.append((oids, target))
         if oids == [f"{APC}.2.2.1.0"]:
             return None, None, 0, [(None, _Val(100))]
         return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
@@ -40,14 +40,19 @@ async def test_read_asks_for_the_right_oids_in_order():
     with patch.object(snmp, "get_cmd", get_cmd), patch.object(snmp.ApcClient, "_target", _target):
         r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
     assert seen == [
-        [
-            f"{APC}.4.1.1.0",  # output status
-            f"{APC}.2.2.3.0",  # runtime remaining
-            f"{APC}.4.2.8.0",  # output watts
-            f"{APC}.5.2.8.0",  # low-battery duration
-            f"{APC}.12.1.2.1.3.2",  # state of group 2
-        ],
-        [f"{APC}.2.2.1.0"],  # battery charge, separately: display only
+        (
+            [
+                f"{APC}.4.1.1.0",  # output status
+                f"{APC}.2.2.3.0",  # runtime remaining
+                f"{APC}.4.2.8.0",  # output watts
+                f"{APC}.5.2.8.0",  # low-battery duration
+                f"{APC}.12.1.2.1.3.2",  # state of group 2
+            ],
+            ("target", 2, 2),
+        ),
+        # Battery charge, separately and quickly: display only, so a card
+        # that never answers it costs at most a second per poll.
+        ([f"{APC}.2.2.1.0"], ("target", 1, 0)),
     ]
     assert r.runtime_min == 57 and r.load_w == 412 and r.group_on
     assert r.charge_pct == 100

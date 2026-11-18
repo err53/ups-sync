@@ -89,8 +89,10 @@ class ApcClient:
         self._write = CommunityData(write, mpModel=1)
         self._group = group
 
-    async def _target(self) -> UdpTransportTarget:
-        return await UdpTransportTarget.create((self._host, 161), timeout=2, retries=2)
+    async def _target(self, timeout: float = 2, retries: int = 2) -> UdpTransportTarget:
+        return await UdpTransportTarget.create(
+            (self._host, 161), timeout=timeout, retries=retries
+        )
 
     @staticmethod
     def _check(err_ind, err_status, binds) -> list[int]:
@@ -133,7 +135,7 @@ class ApcClient:
             err_ind, err_status, _, binds = await get_cmd(
                 self._engine,
                 self._read,
-                await self._target(),
+                await self._target(timeout=1, retries=0),  # never delay a reading
                 ContextData(),
                 ObjectType(ObjectIdentity(OID_CHARGE)),
             )

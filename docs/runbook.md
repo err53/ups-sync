@@ -79,8 +79,9 @@ Do these once, in order, when you can watch the servers.
 
 - Do nothing. Do not press power buttons while the UPS is on battery.
 - Do not power a server on by hand while "Runtime with servers on" is
-  under 26 (or your restore-reserve setting). Let the controller do it. The runtime the UPS shows with the
-  servers off is several times what it will be once they are running.
+  under 26 (or your restore-reserve setting). Let the controller do it.
+  The runtime the UPS shows with the servers off is several times what it
+  will be once they are running.
 - **After an outage the restore can take a while.** It waits until the
   battery has recharged enough to carry the servers through another
   outage, and that wait is real, not a reading that is too cautious. On
@@ -110,7 +111,8 @@ Do these once, in order, when you can watch the servers.
   the battery within two minutes of the outage avoids a shutdown. Later
   than that, the shutdown runs to the end and the servers come back once
   the UPS has had input for six minutes, even if that input is the home
-  battery, and "Runtime with servers on" reads 26 or more.
+  battery, and "Runtime with servers on" reads 26 or more (or your
+  restore-reserve setting).
 
 ## The UPS battery
 
