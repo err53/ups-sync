@@ -25,7 +25,8 @@ same way.
 It talks to the APC Network Management Card over SNMP, to each server's
 iDRAC over Redfish, and optionally to Proxmox over its API. The controller
 is a three-state machine that was model-checked in TLA+ before it was
-written; see [docs/STATE_MACHINE.md](docs/STATE_MACHINE.md) and
+written; see the state diagram in
+[docs/STATE_MACHINE.md](docs/STATE_MACHINE.md#2-controller-states) and
 [formal/RESULTS.md](formal/RESULTS.md).
 
 ## What it does
