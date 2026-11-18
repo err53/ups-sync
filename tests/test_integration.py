@@ -30,7 +30,7 @@ class Rig:
 
     def __init__(self):
         self.now = 1000.0
-        self.reading = UpsReading(True, False, False, 57.0, 400.0, True)
+        self.reading = UpsReading(True, False, False, 57.0, 400.0, True, 100.0)
         self.read_error = None
         self.group_name = "Servers"
         self.reach = {"10.0.0.13": True, "10.0.0.11": True}

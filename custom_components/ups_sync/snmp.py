@@ -21,6 +21,7 @@ from pysnmp.smi import view
 _APC = "1.3.6.1.4.1.318.1.1.1"
 OID_STATUS = f"{_APC}.4.1.1.0"  # upsBasicOutputStatus
 OID_RUNTIME = f"{_APC}.2.2.3.0"  # upsAdvBatteryRunTimeRemaining, 1/100 s
+OID_CHARGE = f"{_APC}.2.2.1.0"  # upsAdvBatteryCapacity, percent
 OID_WATTS = f"{_APC}.4.2.8.0"  # upsAdvOutputActivePower
 OID_LOW_BATT = f"{_APC}.5.2.8.0"  # upsAdvConfigLowBatteryRunTime, 1/100 s
 OID_GROUP_STATE = f"{_APC}.12.1.2.1.3"  # .<group>: 1 on, 2 off
@@ -44,6 +45,7 @@ class UpsReading:
     runtime_min: float
     load_w: float
     group_on: bool
+    charge_pct: float | None = None  # None: the card does not say
 
 
 def make_engine() -> SnmpEngine:
@@ -57,7 +59,9 @@ def make_engine() -> SnmpEngine:
     return engine
 
 
-def parse_reading(status: int, runtime: int, watts: int, low: int, group: int) -> UpsReading:
+def parse_reading(
+    status: int, runtime: int, watts: int, low: int, group: int, charge: int | None = None
+) -> UpsReading:
     """Turn raw PowerNet values into a reading, or raise if the state is unclear."""
     on_battery = status == STATUS_ON_BATTERY
     if not on_battery and status not in STATUS_INPUT_OK:
@@ -71,6 +75,7 @@ def parse_reading(status: int, runtime: int, watts: int, low: int, group: int) -
         runtime_min=runtime / 6000,
         load_w=float(watts),
         group_on=group == 1,
+        charge_pct=None if charge is None else float(charge),
     )
 
 
@@ -84,8 +89,10 @@ class ApcClient:
         self._write = CommunityData(write, mpModel=1)
         self._group = group
 
-    async def _target(self) -> UdpTransportTarget:
-        return await UdpTransportTarget.create((self._host, 161), timeout=2, retries=2)
+    async def _target(self, timeout: float = 2, retries: int = 2) -> UdpTransportTarget:
+        return await UdpTransportTarget.create(
+            (self._host, 161), timeout=timeout, retries=retries
+        )
 
     @staticmethod
     def _check(err_ind, err_status, binds) -> list[int]:
@@ -117,7 +124,25 @@ class ApcClient:
             )
         except Exception as exc:  # pysnmp raises many unrelated types
             raise UpsError(str(exc)) from exc
-        return parse_reading(*self._check(err_ind, err_status, binds))
+        values = self._check(err_ind, err_status, binds)
+        return parse_reading(*values, await self._charge())
+
+    async def _charge(self) -> int | None:
+        """Battery charge, for display only. Asked for separately, so a card
+        that cannot answer it, in whatever way, never fails the reading the
+        controller acts on."""
+        try:
+            err_ind, err_status, _, binds = await get_cmd(
+                self._engine,
+                self._read,
+                await self._target(timeout=1, retries=0),  # never delay a reading
+                ContextData(),
+                ObjectType(ObjectIdentity(OID_CHARGE)),
+            )
+            (value,) = self._check(err_ind, err_status, binds)
+        except Exception:  # noqa: BLE001  timeout, error status, NoSuchObject
+            return None
+        return value
 
     async def group_name(self) -> str:
         """The name the card gives this outlet group, or "" if it has none."""

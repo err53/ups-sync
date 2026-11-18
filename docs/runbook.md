@@ -61,10 +61,14 @@ Do these once, in order, when you can watch the servers.
 9. **Arm.** Turn on `switch.ups_sync_armed`.
 10. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
    both servers off within 8 more, group cut about 2 min after the last one
-   goes quiet. Restore input. Expect the group back on 6 min later, provided
-   the battery is above roughly 55 to 60 %, and both servers booting on
-   their own. The "Runtime with servers on" sensor must read 26 or
-   more for the restore to happen.
+   goes quiet. Restore input. Expect the group back on once input has been
+   stable for 6 min **and** the "Runtime with servers on" sensor reads 26
+   or more (the default of the restore-reserve option), then both servers
+   booting on their own. Start with the "UPS
+   battery charge" sensor at 100 %. Otherwise the restore may wait a long
+   time: on 2026-11-17 a test started at about 80 % charge, six minutes on
+   battery left it at 74 %, and "Runtime with servers on" sat at 16 to 18
+   for over twenty minutes after input returned.
    This is the first time either shutdown channel is used for real.
 11. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
     and confirm both servers shut themselves down after 10 minutes on
@@ -74,9 +78,19 @@ Do these once, in order, when you can watch the servers.
 ## During an outage
 
 - Do nothing. Do not press power buttons while the UPS is on battery.
-- Do not power a server on while the battery is under about 60 % charge. Let the
-  controller do it. The runtime the UPS shows with the servers off is
-  several times what it will be once they are running.
+- Do not power a server on by hand while "Runtime with servers on" is
+  under 26 (or your restore-reserve setting). Let the controller do it.
+  The runtime the UPS shows with the servers off is several times what it
+  will be once they are running.
+- **After an outage the restore can take a while.** It waits until the
+  battery has recharged enough to carry the servers through another
+  outage, and that wait is real, not a reading that is too cautious. On
+  2026-11-17 the UPS said 48 minutes at full load on mains and 29 minutes
+  two minutes into the outage. "Runtime with servers on" is scaled with a
+  fixed exponent of 1.4. Measured against what the battery did on battery
+  that night the exponent was about 1.44, so 1.4 is about 4 % optimistic at
+  that load, which the restore threshold's margin covers. It is not a
+  setting, and a slow restore is not a reason to want it lower.
 - **With grid entities configured:** five minutes after the grid goes, the
   servers shut down and their group is cut, whichever way the transfer
   switch is set. They stay off until the grid is back and has been stable
@@ -97,7 +111,31 @@ Do these once, in order, when you can watch the servers.
   the battery within two minutes of the outage avoids a shutdown. Later
   than that, the shutdown runs to the end and the servers come back once
   the UPS has had input for six minutes, even if that input is the home
-  battery.
+  battery, and "Runtime with servers on" reads 26 or more (or your
+  restore-reserve setting).
+
+## The UPS battery
+
+As read from the card on 2026-11-17: battery last replaced 2022-07-15, the
+card's recommended replacement date 2027-01-15, replace-battery warning not
+raised, last self-test (2026-11-07) passed, last runtime calibration
+(2025-04-20) **invalid**, so the card's runtime figures are not matched to
+this battery. An aged battery holds less and sags more under load, which
+fits the 48 to 29 minute drop above.
+
+- Replace the battery by the card's date. Restores after an outage will
+  then come sooner, and every runtime figure will be closer to the truth.
+- Afterwards, set the replacement date on the card and let the battery
+  reach 100 %.
+- A runtime calibration would make the card's figures match the new
+  battery, but plan it as a separate job. It runs the UPS on battery, which
+  looks like an outage to everything: the armed controller shuts the
+  servers down after 2 minutes (Maintenance does not stop that), TrueNAS
+  shuts flandre down after 10, and the card's load shed still applies. The
+  load then drops and the calibration may abort. Disarm the integration,
+  shut the servers down by hand with Maintenance on, check APC's minimum
+  load for a calibration, and re-arm afterwards. It also leaves the battery
+  nearly empty, so pick a time when an outage would not matter.
 
 ## Maintenance
 

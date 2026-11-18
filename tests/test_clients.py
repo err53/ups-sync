@@ -18,8 +18,8 @@ class _Val:
         return self.v
 
 
-async def _target(self):
-    return "target"
+async def _target(self, timeout=2, retries=2):
+    return ("target", timeout, retries)
 
 
 def _oid_and_value(object_type):
@@ -31,19 +31,64 @@ async def test_read_asks_for_the_right_oids_in_order():
     seen = []
 
     async def get_cmd(engine, community, target, context, *objects):
-        seen.extend(_oid_and_value(o)[0] for o in objects)
+        oids = [_oid_and_value(o)[0] for o in objects]
+        seen.append((oids, target))
+        if oids == [f"{APC}.2.2.1.0"]:
+            return None, None, 0, [(None, _Val(100))]
         return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
 
     with patch.object(snmp, "get_cmd", get_cmd), patch.object(snmp.ApcClient, "_target", _target):
         r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
     assert seen == [
-        f"{APC}.4.1.1.0",  # output status
-        f"{APC}.2.2.3.0",  # runtime remaining
-        f"{APC}.4.2.8.0",  # output watts
-        f"{APC}.5.2.8.0",  # low-battery duration
-        f"{APC}.12.1.2.1.3.2",  # state of group 2
+        (
+            [
+                f"{APC}.4.1.1.0",  # output status
+                f"{APC}.2.2.3.0",  # runtime remaining
+                f"{APC}.4.2.8.0",  # output watts
+                f"{APC}.5.2.8.0",  # low-battery duration
+                f"{APC}.12.1.2.1.3.2",  # state of group 2
+            ],
+            ("target", 2, 2),
+        ),
+        # Battery charge, separately and quickly: display only, so a card
+        # that never answers it costs at most a second per poll.
+        ([f"{APC}.2.2.1.0"], ("target", 1, 0)),
     ]
     assert r.runtime_min == 57 and r.load_w == 412 and r.group_on
+    assert r.charge_pct == 100
+
+
+async def test_a_card_that_cannot_give_its_charge_still_reads():
+    from pysnmp.proto.rfc1905 import NoSuchObject
+
+    main = [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1)]
+
+    def card(charge_answer):
+        async def get_cmd(engine, community, target, context, *objects):
+            if len(objects) == 1:
+                return await charge_answer()
+            return None, None, 0, main
+
+        return get_cmd
+
+    async def no_such():
+        return None, None, 0, [(None, NoSuchObject())]
+
+    async def gen_err():  # an error status for the whole request
+        return None, _Val(5), 1, [(None, _Val(0))]
+
+    async def timeout():
+        raise TimeoutError
+
+    async def empty():
+        return None, None, 0, []
+
+    for answer in (no_such, gen_err, timeout, empty):
+        with patch.object(snmp, "get_cmd", card(answer)), patch.object(
+            snmp.ApcClient, "_target", _target
+        ):
+            r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
+        assert r.charge_pct is None and r.runtime_min == 57 and r.group_on, answer
 
 
 @pytest.mark.parametrize(("on", "value"), [(True, 1), (False, 2)])

@@ -66,6 +66,7 @@ class Controller:
         self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
+        self.charge_pct: float | None = None  # display only; None: not reported
         self._read_ok = False  # the latest poll got a UPS reading
         self.armed = False
         self.maintenance = False
@@ -242,6 +243,7 @@ class Controller:
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
+        self.charge_pct = ups.charge_pct
         mono = time.monotonic()
         if self.last_ok is not None and mono - self.last_ok > MAX_GAP:
             self._forget_settling()  # a stalled loop counts as a missed reading
