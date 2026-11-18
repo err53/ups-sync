@@ -82,7 +82,8 @@ and reports what it would do.
 The two switches on the device page. Home Assistant has no description
 field, so the device's "Visit" link opens this section, and each switch
 carries the same explanation under Attributes when you tap it, written with
-your own timings. Below are the defaults; every time here is an option.
+your own timings. Below are the defaults; every time here is an option
+except the 6 hours for an overdue restore.
 
 **Armed**
 
@@ -91,18 +92,19 @@ your own timings. Below are the defaults; every time here is an option.
     battery, or, with grid entities set and calibration done, after 5 min
     of them showing the grid down.
   - Cuts their outlet group once the UPS load confirms they are off: 2 min
-    after the last one goes quiet, or 10 min if a shutdown was not
-    accepted.
+    after the last one goes quiet if every shutdown was accepted, or 10 min
+    after regardless, whichever comes first.
   - Turns the group back on after 6 min of UPS input (with a grid entity
     showing the grid up, if any are set) once "Runtime with servers on" is
     at least 26. The same rule restores a group you switch off by hand.
-    If a grid entity is set but missing, `waiting_for_grid` on the state
-    sensor says why nothing happens.
+    Until a grid entity shows the grid up (the grid is still down, or the
+    entities are missing, which `grid_entities_missing` lists),
+    `waiting_for_grid` on the state sensor is on.
   - Powers on a server through its iDRAC if it has been off for 10 min while
     another runs, under the same input, grid and battery conditions.
-  - If every server has been off 10 min on live outlets, cuts the group so
-    their BIOS powers them on when it is restored by the rule above. Turn
-    on Maintenance before shutting them down by hand.
+  - If every server has been off 10 min on live outlets, cuts the group
+    (once calibrated) so their BIOS powers them on when it is restored by
+    the rule above. Turn on Maintenance before shutting them down by hand.
 - **Off:** no commands are sent; it still reads the UPS and the iDRACs.
   "Dry run would do" lists what it would do. Turning Armed off does not
   recall a shutdown a server has already accepted.
@@ -111,8 +113,8 @@ your own timings. Below are the defaults; every time here is an option.
 
 - **On:** for working on the servers by hand.
   - Nothing is powered on: no restore, no wake, no power-cycle.
-  - A grid outage does not start a shutdown, so the servers can run on the
-    home battery.
+  - With grid entities set, a grid outage they see does not start a
+    shutdown, so the servers can run on the home battery.
   - 2 min on UPS battery or low battery still shuts them down and cuts the
     group. The group then stays off until you switch it on at the UPS card
     or turn Maintenance off; an iDRAC power-on does nothing while the
@@ -124,10 +126,11 @@ your own timings. Below are the defaults; every time here is an option.
 - **Off:** normal operation. Turn it off when you are done.
   - A group cut while Maintenance was on is turned back on by the restore
     rule, possibly at once.
-  - A server you left off gets a fresh 10 min before it is powered on or
-    the group is power-cycled.
-  - During a grid outage the 5 min grid timer starts again, then the
-    servers are shut down.
+  - A server you left off gets a fresh 10 min (the wake time) before it is
+    powered on, and a fresh 10 min (the dead time) before the group is
+    power-cycled.
+  - With grid entities set, during a grid outage the 5 min grid timer
+    starts again, then (once calibrated) the servers are shut down.
 
 Maintenance changes what is done, or would be done in a dry run, and what
 counts as a problem. Only Armed decides whether anything is sent.

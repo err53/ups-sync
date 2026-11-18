@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchEntity
 
 from .controller import Controller
 from .entity import UpsSyncEntity
+from .machine import RESTORE_OVERDUE
 
 
 def _min(seconds: float) -> str:
@@ -37,16 +38,18 @@ def describe(ctl: Controller, key: str) -> str:
                 if grid
                 else ""
             )
-            + ". Cuts their outlet group, if the UPS load confirms they are "
-            f"off, {_min(p.t_grace)} after the last one goes quiet "
-            f"({_min(p.t_dead)} if a shutdown was not accepted). Turns the "
+            + ". Cuts their outlet group once the UPS load confirms they are "
+            f"off: {_min(p.t_grace)} after the last one goes quiet if every "
+            f"shutdown was accepted, or {_min(p.t_dead)} after regardless, "
+            "whichever comes first. Turns the "
             f"group back on {restore}. The same rule restores a group "
             "switched off by hand. Powers on a server that has been off "
             f"{_min(p.t_wake)} while another runs, if the UPS has input"
             + (" and a grid entity shows the grid up" if grid else "")
             + f" and \"Runtime with servers on\" is at least {p.e_restore:g}. "
             f"If every server has been off {_min(p.t_dead)} on live outlets, "
-            "cuts the group so they boot when it is restored: turn on "
+            "cuts the group (once calibrated) so they boot when it is "
+            "restored: turn on "
             "Maintenance before shutting them down by hand. "
             "Off: sends no commands, only watches; \"Dry run would do\" "
             "shows what it would do. Turning it off does not recall a "
@@ -60,14 +63,23 @@ def describe(ctl: Controller, key: str) -> str:
         "down and cuts the group; the group then stays off until you switch "
         "it on at the UPS card or turn Maintenance off. Turning Maintenance "
         "on does not stop a shutdown already under way; only turning Armed "
-        "off stops further commands. Servers that cannot be revived and an "
-        "overdue restore are not reported as problems. "
+        "off stops further commands. Servers that cannot be revived and a "
+        f"restore overdue for {RESTORE_OVERDUE / 3600:g} h are not reported "
+        "as problems. "
         "Off: a group cut while it was on is turned back on "
-        f"{restore}, possibly at once. A server left off gets a fresh "
-        f"{_min(p.t_dead)}."
+        f"{restore}, possibly at once. "
+        + (
+            f"A server left off gets a fresh {_min(p.t_wake)} before it is "
+            "powered on"
+            + (
+                f", and {_min(p.t_dead)} before the group is power-cycled."
+                if p.t_dead != p.t_wake
+                else " or the group is power-cycled."
+            )
+        )
         + (
             f" During a grid outage the {_min(p.t_grid)} grid timer starts "
-            "again, then the servers are shut down."
+            "again, then (once calibrated) the servers are shut down."
             if grid
             else ""
         )
