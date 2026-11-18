@@ -119,3 +119,26 @@ async def test_the_controls_explain_themselves(hass, rig):
     (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     assert device.configuration_url == CONTROLS_URL
     assert CONTROLS_URL.endswith("#armed-and-maintenance")
+
+
+def test_the_descriptions_use_this_installs_timings():
+    from types import SimpleNamespace
+
+    from custom_components.ups_sync.machine import Params
+    from custom_components.ups_sync.switch import describe
+
+    ctl = SimpleNamespace(params=Params(t_ob=180, t_grid=600, e_restore=30), grid_entities=[])
+    armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
+    assert "after 3 min on UPS battery" in armed and "at least 30" in armed
+    assert "grid" not in armed and "grid" not in maint
+    assert "does not stop a shutdown already under way" in maint
+    ctl.grid_entities = ["sensor.wall"]
+    armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
+    assert "after 10 min of the grid entities showing the grid down" in armed
+    assert "grid timer starts again" in maint
+
+
+async def test_the_description_is_not_kept_in_history(hass, rig):
+    from custom_components.ups_sync.switch import FlagSwitch
+
+    assert "description" in FlagSwitch._unrecorded_attributes

@@ -4,28 +4,74 @@ from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
 
+from .controller import Controller
 from .entity import UpsSyncEntity
 
-# Shown under Attributes when the switch is tapped. Home Assistant has no
-# other place for a description. The README section "Armed and Maintenance"
-# says the same at more length.
-DESCRIPTIONS = {
-    "armed": (
-        "On: acts. Shuts the servers down after 2 min on UPS battery, on low "
-        "battery, or after 5 min of grid outage if grid entities are set; "
-        "cuts their outlet group once they are off; turns it back on when "
-        "power is back and the battery can carry them; powers on a server "
-        "that is off while another runs. Off: only watches, and \"Dry run "
-        "would do\" says what it would have done."
-    ),
-    "maintenance": (
+
+def _min(seconds: float) -> str:
+    return f"{seconds / 60:g} min"
+
+
+def describe(ctl: Controller, key: str) -> str:
+    """What the switch does, with this install's own timings.
+
+    Shown under Attributes when the switch is tapped: Home Assistant has no
+    other place for a description, and the README may be out of reach during
+    an outage, so this must stand on its own. Options reload the entry, so
+    the text always matches the timings in use.
+    """
+    p = ctl.params
+    grid = bool(ctl.grid_entities)
+    restore = (
+        f"after {_min(p.t_hold)} of UPS input"
+        + (" with a grid entity showing the grid up" if grid else "")
+        + f", once \"Runtime with servers on\" is at least {p.e_restore:g}"
+    )
+    if key == "armed":
+        return (
+            "On: sends commands. Shuts the servers down after "
+            f"{_min(p.t_ob)} on UPS battery or at once on low battery"
+            + (
+                f", or after {_min(p.t_grid)} of the grid entities showing the "
+                "grid down (once calibrated)"
+                if grid
+                else ""
+            )
+            + ". Cuts their outlet group, if the UPS load confirms they are "
+            f"off, {_min(p.t_grace)} after the last one goes quiet "
+            f"({_min(p.t_dead)} if a shutdown was not accepted). Turns the "
+            f"group back on {restore}. The same rule restores a group "
+            "switched off by hand. Powers on a server that has been off "
+            f"{_min(p.t_wake)} while another runs, if the UPS has input"
+            + (" and a grid entity shows the grid up" if grid else "")
+            + f" and \"Runtime with servers on\" is at least {p.e_restore:g}. "
+            f"If every server has been off {_min(p.t_dead)} on live outlets, "
+            "cuts the group so they boot when it is restored: turn on "
+            "Maintenance before shutting them down by hand. "
+            "Off: sends no commands, only watches; \"Dry run would do\" "
+            "shows what it would do. Turning it off does not recall a "
+            "shutdown a server has already accepted."
+        )
+    return (
         "On: for working on the servers by hand. Nothing is powered on: no "
-        "restore, no wake, no power-cycle, and a grid outage alone does not "
-        "shut them down. 2 min on UPS battery or low battery still shuts "
-        "them down and cuts the group; they then stay off until you turn "
-        "them on or turn Maintenance off. Turn it off when done."
-    ),
-}
+        "restore, no wake, no power-cycle"
+        + (", and a grid outage does not start a shutdown" if grid else "")
+        + f". {_min(p.t_ob)} on UPS battery or low battery still shuts them "
+        "down and cuts the group; the group then stays off until you switch "
+        "it on at the UPS card or turn Maintenance off. Turning Maintenance "
+        "on does not stop a shutdown already under way; only turning Armed "
+        "off stops further commands. Servers that cannot be revived and an "
+        "overdue restore are not reported as problems. "
+        "Off: a group cut while it was on is turned back on "
+        f"{restore}, possibly at once. A server left off gets a fresh "
+        f"{_min(p.t_dead)}."
+        + (
+            f" During a grid outage the {_min(p.t_grid)} grid timer starts "
+            "again, then the servers are shut down."
+            if grid
+            else ""
+        )
+    )
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -36,10 +82,13 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
 
 class FlagSwitch(UpsSyncEntity, SwitchEntity):
+    # Static text: no need to keep a copy of it in the history.
+    _unrecorded_attributes = frozenset({"description"})
+
     def __init__(self, ctl, entry_id: str, key: str) -> None:
         super().__init__(ctl, entry_id, key)
         self._flag = key
-        self._attr_extra_state_attributes = {"description": DESCRIPTIONS[key]}
+        self._attr_extra_state_attributes = {"description": describe(ctl, key)}
 
     @property
     def is_on(self) -> bool:
