@@ -9,5 +9,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/err53/ups-sync/issues",
   "requirements": ["pysnmp>=7.1.21,<8"],
-  "version": "0.4.0"
+  "version": "0.4.1"
 }

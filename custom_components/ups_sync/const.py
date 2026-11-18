@@ -26,5 +26,8 @@ OPT_TIMINGS = (
 # t_grid: a grid sensor is slower and less sure than the UPS itself.
 MIN_OPTION = {"e_restore": 20, "t_grid": 120}
 
+# Shown as the device's "Visit" link: what Armed and Maintenance do.
+CONTROLS_URL = "https://github.com/err53/ups-sync#armed-and-maintenance"
+
 POLL_SECONDS = 15
 STALE_SECONDS = 120

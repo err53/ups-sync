@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .const import DOMAIN
+from .const import CONTROLS_URL, DOMAIN
 from .controller import Controller
 
 
@@ -18,7 +18,11 @@ class UpsSyncEntity(Entity):
         self._attr_unique_id = f"{entry_id}_{key}"
         self._attr_translation_key = key
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)}, name="UPS sync"
+            identifiers={(DOMAIN, entry_id)},
+            name="UPS sync",
+            # Home Assistant has no description field for a device or an
+            # entity; this shows as a link in the Device info card.
+            configuration_url=CONTROLS_URL,
         )
 
     async def async_added_to_hass(self) -> None:

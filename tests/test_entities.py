@@ -104,3 +104,59 @@ async def test_battery_charge_follows_the_card_and_is_unknown_without_it(hass, r
     rig.read_error = "timeout"
     await rig.run(ctl, 15)
     assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unavailable"
+
+
+async def test_the_controls_explain_themselves(hass, rig):
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.ups_sync.const import CONTROLS_URL, DOMAIN
+
+    await setup(hass, rig)
+    for switch in ("armed", "maintenance"):
+        attrs = hass.states.get(f"switch.ups_sync_{switch}").attributes
+        assert len(attrs["description"]) > 100
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    assert device.configuration_url == CONTROLS_URL
+    assert CONTROLS_URL.endswith("#armed-and-maintenance")
+
+
+def test_the_descriptions_use_this_installs_timings():
+    from types import SimpleNamespace
+
+    from custom_components.ups_sync.machine import Params
+    from custom_components.ups_sync.switch import describe
+
+    ctl = SimpleNamespace(
+        params=Params(t_ob=180, t_grid=600, e_restore=30, t_wake=60, t_dead=1800, t_grace=1200),
+        grid_entities=[],
+    )
+    armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
+    assert "after 3 min on UPS battery" in armed and "at least 30" in armed
+    # Reviewer cases: the cut is at the earlier deadline, and waking uses
+    # the wake time, not the dead time.
+    assert "20 min after the last one goes quiet" in armed
+    assert "30 min after regardless, whichever comes first" in armed
+    assert "fresh 1 min before it is powered on, and 30 min before" in maint
+    assert "overdue for 6 h" in maint
+    assert "grid" not in armed and "grid" not in maint
+    assert "does not stop a shutdown already under way" in maint
+    ctl.grid_entities = ["sensor.wall"]
+    armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
+    assert "after 10 min of the grid entities showing the grid down" in armed
+    assert "grid timer starts again" in maint
+    # The power-cycle waits the longer of the dead and grace times.
+    ctl.params = Params(t_dead=1800, t_grace=2400)
+    assert "has been off 40 min on live outlets" in describe(ctl, "armed")
+    assert "and 40 min before the group is power-cycled" in describe(ctl, "maintenance")
+    # Equal times read as one sentence.
+    ctl.params = Params(t_wake=600, t_dead=600, t_grace=120)
+    assert "10 min before it is powered on or the group is power-cycled." in describe(
+        ctl, "maintenance"
+    )
+
+
+async def test_the_description_is_not_kept_in_history(hass, rig):
+    from custom_components.ups_sync.switch import FlagSwitch
+
+    assert "description" in FlagSwitch._unrecorded_attributes

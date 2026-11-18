@@ -77,14 +77,72 @@ home battery.
 It installs **disarmed**. Until you turn on the Armed switch it only watches
 and reports what it would do.
 
+## Armed and Maintenance
+
+The two switches on the device page. Home Assistant has no description
+field, so the device's "Visit" link opens this section, and each switch
+carries the same explanation under Attributes when you tap it, written with
+your own timings. Below are the defaults; every time here is an option
+except the 6 hours for an overdue restore.
+
+**Armed**
+
+- **On:** it sends commands.
+  - Shuts the servers down after 2 min on UPS battery, at once on low
+    battery, or, with grid entities set and calibration done, after 5 min
+    of them showing the grid down.
+  - Cuts their outlet group once the UPS load confirms they are off: 2 min
+    after the last one goes quiet if every shutdown was accepted, or 10 min
+    after regardless, whichever comes first.
+  - Turns the group back on after 6 min of UPS input (with a grid entity
+    showing the grid up, if any are set) once "Runtime with servers on" is
+    at least 26. The same rule restores a group you switch off by hand.
+    Until a grid entity shows the grid up (the grid is still down, or the
+    entities are missing, which `grid_entities_missing` lists),
+    `waiting_for_grid` on the state sensor is on.
+  - Powers on a server through its iDRAC if it has been off for 10 min while
+    another runs, under the same input, grid and battery conditions.
+  - If every server has been off 10 min on live outlets, cuts the group
+    (once calibrated) so their BIOS powers them on when it is restored by
+    the rule above. Turn on Maintenance before shutting them down by hand.
+- **Off:** no commands are sent; it still reads the UPS and the iDRACs.
+  "Dry run would do" lists what it would do. Turning Armed off does not
+  recall a shutdown a server has already accepted.
+
+**Maintenance**
+
+- **On:** for working on the servers by hand.
+  - Nothing is powered on: no restore, no wake, no power-cycle.
+  - With grid entities set, a grid outage they see does not start a
+    shutdown, so the servers can run on the home battery.
+  - 2 min on UPS battery or low battery still shuts them down and cuts the
+    group. The group then stays off until you switch it on at the UPS card
+    or turn Maintenance off; an iDRAC power-on does nothing while the
+    outlets are off.
+  - **It does not stop a shutdown already under way.** Only turning Armed
+    off stops further commands.
+  - Servers that cannot be revived and a restore overdue for 6 hours are
+    not reported as problems.
+- **Off:** normal operation. Turn it off when you are done.
+  - A group cut while Maintenance was on is turned back on by the restore
+    rule, possibly at once.
+  - A server you left off gets a fresh 10 min (the wake time) before it is
+    powered on, and a fresh 10 min (the dead time) before the group is
+    power-cycled.
+  - With grid entities set, during a grid outage the 5 min grid timer
+    starts again, then (once calibrated) the servers are shut down.
+
+Maintenance changes what is done, or would be done in a dry run, and what
+counts as a problem. Only Armed decides whether anything is sent.
+
 ## Entities
 
 | Entity | Purpose |
 | --- | --- |
 | `sensor.ups_sync_state` | idle, shutdown, or cut. Attributes hold every reading and the dry-run plan. |
 | `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or calibration is incomplete |
-| `switch.ups_sync_armed` | off: observe only. on: act. |
-| `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Outage shutdown still works. |
+| `switch.ups_sync_armed` | off: observe only. on: act. See [Armed and Maintenance](#armed-and-maintenance). |
+| `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Shutdown on UPS battery still works. See [Armed and Maintenance](#armed-and-maintenance). |
 | UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
 | UPS battery charge | the card's charge reading, for display only; unknown on a card that does not report it |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
