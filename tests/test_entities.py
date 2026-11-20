@@ -128,11 +128,16 @@ def test_the_descriptions_use_this_installs_timings():
     from custom_components.ups_sync.switch import describe
 
     ctl = SimpleNamespace(
-        params=Params(t_ob=180, t_grid=600, e_restore=30, t_wake=60, t_dead=1800, t_grace=1200),
+        params=Params(
+            t_ob=180, t_grid=600, e_restore=30, c_restore=85, t_wake=60, t_dead=1800,
+            t_grace=1200,
+        ),
         grid_entities=[],
     )
     armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
     assert "after 3 min on UPS battery" in armed and "at least 30" in armed
+    assert '"UPS battery charge" is at least 85 %' in armed
+    assert '"UPS battery charge" is at least 85 %' in maint
     # Reviewer cases: the cut is at the earlier deadline, and waking uses
     # the wake time, not the dead time.
     assert "20 min after the last one goes quiet" in armed

@@ -19,6 +19,10 @@ run tdead_eq_bmax         T_DEAD=3                                  # dead timer
 run no_grace              T_GRACE=0                                 # cut as soon as ping stops
 run ha_reliable           HA_CAN_FAIL=FALSE
 run long_net_tail         NET_TAIL=2                                # ping dies 4 min before power-off
-run low_restore           E_RESTORE=10                              # restore with little runtime in the bank
+run low_restore           C_RESTORE=20                              # restore at 20 % charge: 12 min in the bank
+run restore_34           C_RESTORE=34                              # 34 % of 57: restore at 20 min in the bank
+run restore_31            C_RESTORE=31                              # 31 % of 57: restore at 18 min
+run aged_battery_24       EMAX=24                                   # battery holds 24 full-load min: 80 % = 20
+run aged_battery_22       EMAX=22                                   # 80 % of 22: 18
 run old_shed_6            E_SHED=6                                  # previous shed threshold, same card return
 run card_return_too_low   E_RETURN=14                               # card returns the group with too little reserve

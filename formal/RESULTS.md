@@ -1,5 +1,7 @@
 # TLC verification results
 
+> **Revised 2026-11-20:** the restore now goes by battery charge; see the last section.
+>
 > **Revised 2026-11-17 after code review.** The card settings changed: load
 > shed is now "runtime < 3 min" (was 6) and the card's return threshold is
 > modelled as 17 (was 30). The section "Revision: runtime is measured at the
@@ -308,3 +310,72 @@ Three bugs were found in this change before it merged.
    servers down after any slow restart; counting it as "not down" let the
    servers be restored on the DPU. The sensor now gives two answers,
    evidence of down and evidence of up, and a silent sensor gives neither.
+
+## Revision 2026-11-20: restore by battery charge
+
+An armed grid-sensor test on 2026-11-20 shut the servers down and cut the
+group correctly, then never restored it. The charge stayed at 94 % and the
+UPS never went on battery, but the controller's reserve, the card's runtime
+at the present load scaled to the peak with exponent 1.4, read 38 with the
+servers running and 20 to 22 with the group cut, below `E_RESTORE` = 26.
+With the group cut the load is about 155 W against a 495 W peak, and the
+card's own figures that night (109 to 137 min at about 155 W, 52 min at
+436 W) put its curve between those loads near 0.7, not 1.4. The scaling
+holds near the peak and fails far below it.
+
+The restore now goes by the card's battery charge. In both models `DoRest`
+needs `ChargeOk == e * 100 >= C_RESTORE * EMAX` in place of
+`e >= E_RESTORE`, with `C_RESTORE = 80` in every configuration. `EMAX` is
+what this battery holds when full, so an aged battery is a smaller `EMAX`.
+`DoWol` and the human power-on assumption still use `E_RESTORE`. In
+`UpsSync.tla` `E_RESTORE` is now unused.
+
+### TLC runs
+
+| Config | Checks | Result |
+| --- | --- | --- |
+| `MC_Baseline.cfg` (single server, `GS = "any"`) | `TypeOK`, `NoHardCut`, `NoTimeout`, `NoSpurious`, `EventuallyRunning` | **PASS**, 1,336,530 distinct states, 113.5 M generated, depth 57, 26 min |
+| `MC2_NoHuman_safety.cfg` (two servers, `GS = "true"`) | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **PASS**, 2,085,760 distinct states, depth 56, 54 min |
+| `MC2_NoHuman_live.cfg` (two servers, `GS = "off"`) | `EventuallyRunning` | **PASS**, 2,564,360 distinct states, 161.6 M generated, depth 57, 86 min |
+| `MC2_NoHuman_gs_sim.cfg` (two servers, `GS = "any"`) | `-simulate -depth 300`, 20 min | **No violation** in 62.7 M states checked |
+| `MC2_Human_sim.cfg` (two servers, humans) | `-simulate -depth 300` | **No violation** in 42.9 M states checked; stopped by the job limit about a minute short of its 15 min |
+
+The distinct-state counts equal those of the previous revision: restoring
+later does not reach any state that was unreachable before, it only removes
+early restores.
+
+Single-server safety sweep (`MC_Baseline_safety.cfg`, `tools/variants.sh`):
+
+| Variant | Change | Restore at | Result |
+| --- | --- | --- | --- |
+| low_restore | `C_RESTORE = 20` | 12 min | **FAIL** `NoHardCut`, 41-state trace: after two outages the group is restored with 15 min in the bank, the grid fails again during the boot, and the card sheds the group under a shutting-down server |
+| restore_34 | `C_RESTORE = 34` | 20 min | PASS |
+| restore_31 | `C_RESTORE = 31` | 18 min | PASS |
+| aged_battery_24 | `EMAX = 24` | 20 min | PASS, 391,530 distinct states |
+| aged_battery_22 | `EMAX = 22` | 18 min | PASS, 342,090 distinct states |
+
+In the model a restore at 15 minutes can end in a hard cut and the sweep
+passes from 18, close to the tick-rounded bound of the card's return
+threshold above. The model draws no more during
+a boot than while running, though. The simulator does (280 W per booting
+server against 80 to 160 W running), and its fixed worst case
+(`test_a_second_outage_right_after_a_restore_at_the_threshold`: restore
+exactly at the threshold, an outage at once, the longest boot unreachable to
+the end, the longest shutdown, the steepest curve) hard-cuts a server with a
+24-minute battery at 80 %, which is 19.2 minutes in the bank. So the working
+rule keeps the margin the runtime rule had: `C_RESTORE` % of a full battery
+must be at least `E_RESTORE` = 26 minutes with the servers running, which at
+80 % means the battery must hold 32.5. The runbook says how to check it.
+
+### Simulator
+
+`tests/test_sim.py` now reports charge as a share of the battery's own full
+energy, and draws the curve exponent from 0.6 to 1.3 (was 1.0 to 1.3) so it
+includes what the real card showed.
+
+| Variant (1000 runs of 16 simulated hours) | Result |
+| --- | --- |
+| restore by charge, battery 57 | pass. 2,884 restores, the lowest at 45.6 min in the bank |
+| same, battery 24, humans, 30 % of commands failing, random grid sensor | no hard cut. Lowest at a restore 19.2. One run left a server off while the other ran: a wake needs `E_RESTORE` with the servers on, which a battery that small never reaches |
+| restore at 40 % with a 24-minute battery (mutation) | **23 hard cuts** |
+| restore by the scaled reserve, as before (mutation) | **servers left off** in 7 runs: the bug of 2026-11-20 |

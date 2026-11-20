@@ -33,7 +33,8 @@ CONSTANTS
   T_DEAD,      \* controller: ticks servers unpingable without ack -> assume off
   T_WAIT,      \* controller: SHUTDOWN taking longer than this raises an alarm (notification only)
   T_HOLD,      \* controller: ticks input must be stable before restore
-  E_RESTORE,   \* controller: min energy before restore
+  E_RESTORE,   \* controller: min energy before a wake (and, in UpsSync2, the human assumption)
+  C_RESTORE,   \* controller: min battery charge, in % of EMAX, before restore
   E_SHED,      \* NMC load shed: group 2 off when on battery and e < E_SHED
   E_LB,        \* UPS low-battery threshold (NUT "LB")
   E_RETURN,    \* NMC min return runtime for auto power-on of group 2
@@ -108,7 +109,13 @@ HaCmd    == InShut /\ srv = "RUN" /\ Reach          \* ssh poweroff succeeds thi
 DoCutOk  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ ~Reach /\ ~LoadHigh
             /\ ((acked /\ darkT >= T_GRACE) \/ darkT >= T_DEAD)
 DoCutTO  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ waitT >= T_WAIT /\ ~DoCutOk
-DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ e >= E_RESTORE
+\* The restore goes by the card's battery charge, a share of what this battery
+\* holds when full (EMAX), not by a runtime estimate. With the group cut the
+\* controller can only scale the card's light-load runtime to the servers'
+\* load, and that scaling halved it on the real UPS, so no restore was ever
+\* approved. A smaller EMAX models an aged battery.
+ChargeOk == e * 100 >= C_RESTORE * EMAX
+DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ ChargeOk
 
 (* Server backstop (its own NUT client) *)
 SrvBackstop == srv = "RUN" /\ SrvSignal

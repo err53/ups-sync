@@ -10,7 +10,9 @@ commands and humans pressing power buttons.
 Like the real UPS, this one reports runtime at its PRESENT load, with a
 load-to-runtime curve the controller does not know, and its low-battery flag,
 load shed and return thresholds all use that figure. The card may turn the
-group back on by itself whenever its own threshold is met.
+group back on by itself whenever its own threshold is met. It also reports
+its charge, as a share of what this battery holds when full, which may be
+far less than a new one.
 
 Checked on every step: no server loses power unless it is off (NoHardCut),
 shutdown is only ever started on battery (NoSpurious). Checked at the end:
@@ -25,6 +27,7 @@ import random
 import pytest
 
 from custom_components.ups_sync.machine import (
+    CUT,
     IDLE,
     Obs,
     Params,
@@ -64,20 +67,28 @@ class HardCut(AssertionError):
 
 class World:
     def __init__(
-        self, seed: int, humans: bool, cmd_fail: float, sensor: bool = False
+        self,
+        seed: int,
+        humans: bool,
+        cmd_fail: float,
+        sensor: bool = False,
+        cap: float = E_MAX,
     ) -> None:
         self.r = random.Random(seed)
+        self.cap = cap  # full-load minutes this battery holds when full
         self.humans, self.cmd_fail = humans, cmd_fail
         # Optional grid sensor. It moves at random between "up", "down" and
         # "silent" (no entity being provided), unrelated to the UPS input,
         # so it is often wrong in both directions.
         self.sensor, self.grid, self.grid_until = sensor, "up", 0
         self.t = 0
-        self.e = E_MAX
+        self.e = cap
         self.input = True
         self.input_until = self.r.randint(600, 7200)
         self.group, self.off_by = True, "ha"  # ha | shed | dead
-        self.curve = self.r.uniform(1.0, 1.3)  # Peukert-like exponent
+        # Load-to-runtime exponent. The real card's figures on 2026-11-20 put
+        # it near 0.7 between 155 W and 436 W, far below the controller's 1.4.
+        self.curve = self.r.uniform(0.6, 1.3)
         self.peak: float | None = None
         self.prev_sample: float | None = None
         self.up_since: float | None = None
@@ -149,6 +160,7 @@ class World:
             servers=servers,
             grid_down=self.sensor and self.grid == "down",
             grid_ok=not self.sensor or self.grid == "up",
+            charge_pct=100 * self.e / self.cap,
         )
 
     # ---- server state changes --------------------------------------------
@@ -203,7 +215,7 @@ class World:
                 self.set_group(False, "ha")
                 enter_cut(self.st)
             elif act.kind == "restore" and not failed:
-                assert o.reserve_min >= P.e_restore
+                assert o.charge_pct >= P.c_restore
                 assert o.grid_ok, "restored without the grid sensor reading up"
                 self.restores.append(self.e)
                 self.set_group(True, "ha")
@@ -286,7 +298,7 @@ class World:
             )
         was = self.powered()
         if self.input:
-            self.e = min(E_MAX, self.e + 0.5 * DT / 60)
+            self.e = min(self.cap, self.e + 0.5 * DT / 60 * self.cap / E_MAX)
         else:
             self.e = max(0.0, self.e - self.drain() * DT / 60)
             if self.e == 0 and self.group:
@@ -308,8 +320,9 @@ def run(
     cmd_fail: float = 0.0,
     hours: int = 16,
     sensor: bool = False,
+    cap: float = E_MAX,
 ) -> World:
-    w = World(seed, humans, cmd_fail, sensor)
+    w = World(seed, humans, cmd_fail, sensor, cap)
     while w.t < hours * 3600:
         w.step()
     # Settle: power and HA stay up, nobody interferes.
@@ -351,3 +364,48 @@ def test_no_hard_cut_with_a_grid_sensor_that_is_often_wrong(seed):
     assert w.st.ctl == IDLE and w.group
     w = run(seed, humans=True, cmd_fail=0.3, sensor=True)
     assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
+
+
+# The smallest battery the default c_restore is safe for: 80 % of it is
+# e_restore, the margin the runtime rule always had. It covers a boot that
+# draws up to about twice the running load, then a shutdown, then the shed
+# margin (formal/RESULTS.md, docs/STATE_MACHINE.md section 8).
+MIN_CAP = P.e_restore * 100 / P.c_restore
+
+
+def test_a_second_outage_right_after_a_restore_at_the_threshold():
+    """Worst case, fixed: restored at exactly c_restore with no recharge
+    during the hold, the grid fails at once, both servers take the longest
+    boot unreachable to the end, then the longest shutdown, on the steepest
+    curve. Found in review: with a 24-minute battery the group was shed 75 s
+    before a shutdown finished."""
+    w = World(0, humans=False, cmd_fail=0.0, cap=MIN_CAP)
+    w.curve = 1.3
+    w.watts = dict.fromkeys(NAMES, RUN_MAX_W)
+    w.group, w.srv = False, dict.fromkeys(NAMES, "OFF")
+    w.e = MIN_CAP * P.c_restore / 100
+    w.t, w.st = P.t_hold, State(ctl=CUT, hold_since=0)
+    w.controller()
+    assert w.group and w.restores == [w.e]
+    w.input, w.settling = False, True  # an outage from now on, nobody else acts
+    w.timer = dict.fromkeys(NAMES, 360)
+    w.boot_tail = dict.fromkeys(NAMES, 0)
+
+    def longest_shutdown(n: str) -> None:
+        w.srv[n], w.timer[n], w.tail[n] = "SHUT", 480, 0
+
+    w.begin_shutdown = longest_shutdown
+    for _ in range(3600 // DT):
+        w.step()  # raises HardCut if the card sheds a server that is not off
+    assert w.srv == dict.fromkeys(NAMES, "OFF")
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_an_aged_battery_still_leaves_enough_at_a_restore(seed):
+    """The battery holds just MIN_CAP, under 60 % of a new one."""
+    w = run(seed, humans=True, cmd_fail=0.3, sensor=True, cap=MIN_CAP)
+    assert w.group and w.st.ctl == IDLE
+    assert all(e >= P.e_restore for e in w.restores), min(w.restores)
+    # Not checked: that every server runs in the end. A server left off
+    # while the other runs is woken only at e_restore minutes with the
+    # servers on, which a battery this small never reaches (seed 989).

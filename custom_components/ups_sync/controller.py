@@ -66,7 +66,7 @@ class Controller:
         self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
-        self.charge_pct: float | None = None  # display only; None: not reported
+        self.charge_pct: float | None = None  # gates a restore; None: not reported
         self._read_ok = False  # the latest poll got a UPS reading
         self.armed = False
         self.maintenance = False
@@ -271,6 +271,7 @@ class Controller:
             },
             grid_down=grid_down,
             grid_ok=grid_ok,
+            charge_pct=ups.charge_pct,
         )
 
     async def async_step(self, _now=None) -> None:
