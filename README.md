@@ -104,7 +104,9 @@ except the 6 hours for an overdue restore.
     entities are missing, which `grid_entities_missing` lists),
     `waiting_for_grid` on the state sensor is on.
   - Powers on a server through its iDRAC if it has been off for 10 min while
-    another runs, under the same input, grid and battery conditions.
+    another runs, under the same input and grid conditions, once "Runtime
+    with servers on" is at least 26 (with one server running the load is
+    near the servers' peak, where that figure holds).
   - If every server has been off 10 min on live outlets, cuts the group
     (once calibrated) so their BIOS powers them on when it is restored by
     the rule above. Turn on Maintenance before shutting them down by hand.
