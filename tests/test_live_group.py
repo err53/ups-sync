@@ -49,15 +49,13 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
                          "idrac_host": "127.0.0.1", "idrac_user": "x", "idrac_password": "x"}],
         },
         # The group is empty, so the whole UPS load counts as "idle" here.
-        options={"load_idle_max": 100000, "t_hold": 4, "t_dead": 4, "t_grace": 2, "e_restore": 5},
+        options={"load_idle_max": 100000, "t_hold": 4, "t_dead": 4, "t_grace": 2, "c_restore": 50},
     )
     entry.add_to_hass(hass)
     server = "custom_components.ups_sync.servers.Server"
     with patch(f"{server}.reachable", _off), patch(f"{server}.chassis_on", _off):
         assert await hass.config_entries.async_setup(entry.entry_id)
         ctl = entry.runtime_data
-        # The group is empty and may be off, so no full load is ever seen.
-        ctl.peak = ctl.obs.load_w
         found_on = ctl.obs.group_on
         print(f"\nfound group {GROUP} {'on' if found_on else 'off'}, load {ctl.obs.load_w} W, "
               f"runtime {ctl.obs.runtime_min:.0f} min")

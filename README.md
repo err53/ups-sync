@@ -59,7 +59,7 @@ is not restored until one shows life again.
 Pick entities that are reliably available. If all of them drop out for some
 other reason, the servers are shut down cleanly and come back when one
 returns; nothing is ever hard-cut on this signal. This trigger only works
-once the controller is calibrated. An entity that no integration is
+once the idle load is set. An entity that no integration is
 providing (renamed, deleted, or not loaded yet after a restart) says
 nothing: it cannot start a shutdown and cannot allow a restore, and it
 raises the problem sensor. So does a group that has been held off for six
@@ -90,25 +90,22 @@ except the 6 hours for an overdue restore.
 
 - **On:** it sends commands.
   - Shuts the servers down after 2 min on UPS battery, at once on low
-    battery, or, with grid entities set and calibration done, after 5 min
+    battery, or, with grid entities set and the idle load set, after 5 min
     of them showing the grid down.
   - Cuts their outlet group once the UPS load confirms they are off: 2 min
     after the last one goes quiet if every shutdown was accepted, or 10 min
     after regardless, whichever comes first.
   - Turns the group back on after 6 min of UPS input (with a grid entity
     showing the grid up, if any are set) once "UPS battery charge" is at
-    least 80 %. The same rule restores a group you switch off by hand. On a
-    card that does not report its charge, it waits for "Runtime with
-    servers on" to reach 26 instead.
+    least 80 %. The same rule restores a group you switch off by hand.
     Until a grid entity shows the grid up (the grid is still down, or the
     entities are missing, which `grid_entities_missing` lists),
     `waiting_for_grid` on the state sensor is on.
   - Powers on a server through its iDRAC if it has been off for 10 min while
     another runs, if the UPS has input (and a grid entity shows the grid
-    up, if any are set) and "Runtime with servers on" is at least 26 (with one server running the load is
-    near the servers' peak, where that figure holds).
+    up, if any are set) and "UPS battery charge" is at least 80 %.
   - If every server has been off 10 min on live outlets, cuts the group
-    (once calibrated) so their BIOS powers them on when it is restored by
+    (once the idle load is set) so their BIOS powers them on when it is restored by
     the rule above. Turn on Maintenance before shutting them down by hand.
 - **Off:** no commands are sent; it still reads the UPS and the iDRACs.
   "Dry run would do" lists what it would do. Turning Armed off does not
@@ -135,7 +132,7 @@ except the 6 hours for an overdue restore.
     powered on, and a fresh 10 min (the dead time) before the group is
     power-cycled.
   - With grid entities set, during a grid outage the 5 min grid timer
-    starts again, then (once calibrated) the servers are shut down.
+    starts again, then (once the idle load is set) the servers are shut down.
 
 Maintenance changes what is done, or would be done in a dry run, and what
 counts as a problem. Only Armed decides whether anything is sent.
@@ -145,14 +142,14 @@ counts as a problem. Only Armed decides whether anything is sent.
 | Entity | Purpose |
 | --- | --- |
 | `sensor.ups_sync_state` | idle, shutdown, or cut. Attributes hold every reading and the dry-run plan. |
-| `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or calibration is incomplete |
+| `binary_sensor.ups_sync_problem` | on when the UPS cannot be read, a shutdown is overdue, a cut or restore command failed, the servers are off and cannot be power-cycled, or the idle load is not set |
 | `switch.ups_sync_armed` | off: observe only. on: act. See [Armed and Maintenance](#armed-and-maintenance). |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Shutdown on UPS battery still works. See [Armed and Maintenance](#armed-and-maintenance). |
-| UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
-| UPS battery charge | the card's charge reading, which decides when a cut group is turned back on; unknown on a card that does not report it |
+| UPS load, UPS battery charge | the numbers the controller works from: the load for the cut guard, the charge for every restore and wake |
+| UPS runtime at present load | the card's own estimate, for display and the runbook's capacity check; it decides nothing |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
 | `<server>` reachable, `<server>` power | per server: answers on the network, chassis powered (from the iDRAC) |
-| Calibrated | on once the peak load is learned and the idle load is set |
+| Calibrated | on once the idle load is set |
 | Dry run would do, Last action, Last error | what it would do while disarmed, and what it last did |
 
 Sensors that come from a UPS reading turn unavailable as soon as a poll of

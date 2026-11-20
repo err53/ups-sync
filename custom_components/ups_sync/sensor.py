@@ -11,7 +11,9 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfPower, UnitOfTime
+from homeassistant.helpers import entity_registry as er
 
+from .const import DOMAIN
 from .controller import Controller
 from .entity import UpsSyncEntity
 from .machine import CUT, IDLE, SHUTDOWN
@@ -33,17 +35,26 @@ def _obs(field: str) -> Callable[[Controller], Any]:
 SENSORS: tuple[tuple[str, Callable[[Controller], Any], bool, Any, Any, bool], ...] = (
     ("load", _obs("load_w"), True, SensorDeviceClass.POWER, UnitOfPower.WATT, False),
     ("runtime", _obs("runtime_min"), True, SensorDeviceClass.DURATION, UnitOfTime.MINUTES, False),
-    ("reserve", _obs("reserve_min"), True, SensorDeviceClass.DURATION, UnitOfTime.MINUTES, False),
-    ("battery_charge", lambda ctl: ctl.charge_pct, True, SensorDeviceClass.BATTERY, PERCENTAGE, False),
-    ("peak_load", lambda ctl: ctl.peak, False, SensorDeviceClass.POWER, UnitOfPower.WATT, True),
+    ("battery_charge", _obs("charge_pct"), True, SensorDeviceClass.BATTERY, PERCENTAGE, False),
     ("would_act", lambda ctl: _text("; ".join(ctl.would_act)), False, None, None, False),
     ("last_action", lambda ctl: _text(ctl.last_action), False, None, None, True),
     ("last_error", lambda ctl: _text(ctl.last_error), False, None, None, True),
 )
 
 
+# Sensors of earlier versions: "Runtime with servers on" and "Peak load".
+# The restore no longer goes by them.
+REMOVED = ("reserve", "peak_load")
+
+
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     ctl = entry.runtime_data
+    registry = er.async_get(hass)
+    for key in REMOVED:
+        if entity_id := registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_{key}"
+        ):
+            registry.async_remove(entity_id)
     async_add_entities(
         [
             StateSensor(ctl, entry.entry_id, "state"),
@@ -74,8 +85,7 @@ class ReadingSensor(UpsSyncEntity, SensorEntity):
         self._attr_native_unit_of_measurement = unit
         if unit is not None:
             self._attr_state_class = SensorStateClass.MEASUREMENT
-            # Minutes to one decimal: the restore threshold compares the
-            # exact value, so 25.6 must not show as 26.
+            # Minutes to one decimal; the runbook's capacity check uses them.
             self._attr_suggested_display_precision = (
                 1 if unit == UnitOfTime.MINUTES else 0
             )

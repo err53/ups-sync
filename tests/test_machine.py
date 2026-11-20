@@ -10,12 +10,8 @@ from custom_components.ups_sync.machine import (
     State,
     decide,
     enter_cut,
-    all_up_since,
     observe,
-    peak_sample,
-    reserve_minutes,
     stuck,
-    update_peak,
 )
 
 P = Params(load_idle_max=210)
@@ -27,26 +23,24 @@ BOOTING = ServerObs(False, True)
 def obs(
     battery=False,
     low=False,
-    reserve=57,
+    charge=94,
     load=400,
     group=True,
     f=UP,
     s=UP,
     grid=True,
-    charge=None,
 ):
     return Obs(
         input_present=not battery,
         on_battery=battery,
         low_battery=low,
         runtime_min=150,  # at present load: must never gate anything
-        reserve_min=reserve,
+        charge_pct=charge,
         load_w=load,
         group_on=group,
         servers={"f": f, "s": s},
         grid_down=grid is False,
         grid_ok=grid is True,
-        charge_pct=charge,
     )
 
 
@@ -214,51 +208,38 @@ def test_reconcile_after_restart():
     assert st.ctl == IDLE
 
 
-def test_restore_needs_stable_input_and_reserve():
+def test_restore_needs_stable_input_and_charge():
     st = State(ctl=CUT)
     off = dict(group=False, f=OFF, s=OFF, load=150)
     assert step(st, obs(**off), 0) == []
     assert step(st, obs(**off), 359) == []
-    assert step(st, obs(reserve=25, **off), 360) == []
-    assert step(st, obs(reserve=None, **off), 360) == []  # ratio never learned
+    assert step(st, obs(charge=79, **off), 360) == []
     assert step(st, obs(**off), 360, maintenance=True) == []
     assert kinds(step(st, obs(**off), 360)) == [("restore", None)]
     assert step(st, obs(battery=True, **off), 375) == []
     assert step(st, obs(**off), 390) == []  # hold timer restarted
 
 
-def test_restore_goes_by_charge_when_the_card_reports_it():
+def test_restore_goes_by_charge_whatever_the_runtime_says():
     """2026-11-20: a grid-trigger shutdown at 94 % charge, the UPS never on
-    battery. With the group cut, the runtime scaled to the peak read 20 to
-    22, under e_restore, and the group was never restored."""
+    battery. The runtime scaled to the peak read 20 to 22 with the group
+    cut, and the group was never restored. Runtime no longer gates it."""
     st = State(ctl=CUT)
     off = dict(group=False, f=OFF, s=OFF, load=155)
-    assert step(st, obs(reserve=20.6, charge=94, **off), 0) == []
-    assert step(st, obs(reserve=20.6, charge=94, **off), 359) == []
-    assert kinds(step(st, obs(reserve=20.6, charge=94, **off), 360)) == [
-        ("restore", None)
-    ]
-    st = State(ctl=CUT)
-    assert step(st, obs(reserve=57, charge=79, **off), 0) == []
-    assert step(st, obs(reserve=57, charge=79, **off), 3600) == []  # charge decides
-    assert kinds(step(st, obs(reserve=None, charge=80, **off), 3615)) == [
-        ("restore", None)
-    ]
+    assert step(st, obs(**off), 0) == []
+    assert kinds(step(st, obs(**off), 360)) == [("restore", None)]
     st = State(ctl=CUT)
     p = Params(load_idle_max=210, c_restore=95)
-    assert step(st, obs(charge=94, **off), 0, p) == []
-    assert step(st, obs(charge=94, **off), 3600, p) == []
-    assert step(st, obs(charge=94, **off), 3600, p, maintenance=True) == []
+    assert step(st, obs(**off), 0, p) == []
+    assert step(st, obs(**off), 3600, p) == []
 
 
-def test_a_wake_still_goes_by_runtime_with_servers_on():
-    """With one server running the load is near the peak, where the scaling
-    holds; a full battery does not excuse a short runtime."""
+def test_a_wake_goes_by_charge_too():
     st = State()
     part = dict(f=OFF, s=UP)
-    assert step(st, obs(reserve=20, charge=100, **part), 0) == []
-    assert step(st, obs(reserve=20, charge=100, **part), 900) == []
-    assert kinds(step(st, obs(reserve=30, charge=10, **part), 915)) == [("wake", "f")]
+    assert step(st, obs(charge=79, **part), 0) == []
+    assert step(st, obs(charge=79, **part), 900) == []
+    assert kinds(step(st, obs(charge=80, **part), 915)) == [("wake", "f")]
 
 
 def test_restore_waits_t_hold_after_the_cut_even_if_input_was_stable_for_days():
@@ -327,7 +308,7 @@ def test_stuck_dark_is_reported_when_the_guard_blocks_the_cycle():
 
 def test_stuck_when_a_restore_is_hours_overdue():
     st = State(ctl=CUT)
-    low = obs(group=False, f=OFF, s=OFF, load=150, reserve=10)
+    low = obs(group=False, f=OFF, s=OFF, load=150, charge=50)
     assert step(st, low, 0) == []
     assert step(st, low, 6 * 3600 - 30) == []
     assert not stuck(st, low, 6 * 3600 - 30, 0, P)
@@ -346,56 +327,6 @@ def test_readings_a_minute_apart_still_count_as_continuous():
     off = obs(group=False, f=OFF, s=OFF, load=150)
     acts = [a for t in range(0, 361, 60) for a in jump(st, off, t)]
     assert kinds(acts) == [("restore", None)]
-
-
-def test_reserve_is_runtime_scaled_to_the_heaviest_load_seen():
-    assert reserve_minutes(150, 150, None) is None
-    # Servers off: the UPS says 150 min at 150 W. At a 420 W peak that is 35.
-    assert round(reserve_minutes(150, 150, 420)) == 35
-    # Never more than the UPS's own figure, and equal to it at or above peak.
-    assert reserve_minutes(57, 420, 420) == 57
-    assert reserve_minutes(57, 500, 420) == 57
-    # Conservative against a linear conversion (150 * 150 / 420 = 53.6).
-    assert reserve_minutes(150, 150, 420) < 150 * 150 / 420
-
-
-def test_peak_counts_only_readings_after_every_server_has_settled():
-    up = all_up_since(None, True, True, 1000)
-    assert up == 1000 and all_up_since(up, True, True, 1200) == 1000
-    assert all_up_since(up, True, False, 1200) is None  # a server off or booting
-    assert all_up_since(up, False, True, 1200) is None  # group cut
-    # A server answers before its boot is over: wait PEAK_SETTLE first.
-    assert peak_sample(700, up, 1000) is None
-    assert peak_sample(700, up, 1299) is None
-    assert peak_sample(400, up, 1300) == 400
-    assert peak_sample(170, None, 5000) is None  # a server off: standby draw
-    assert peak_sample(0, up, 1300) is None  # a card reporting 0 W
-
-
-def test_peak_only_rises_and_needs_two_eligible_readings_in_a_row():
-    assert update_peak(None, None, 400) is None  # one reading is not enough
-    assert update_peak(None, 400, 410) == 400
-    assert update_peak(400, 410, 900) == 410  # a single spike is not believed
-    assert update_peak(410, 900, 905) == 900  # a sustained one is
-    assert update_peak(900, 300, 300) == 900  # never falls
-    assert update_peak(400, 400, None) == 400 and update_peak(None, None, None) is None
-    assert reserve_minutes(57, 150, 0) is None  # a stored zero is "unknown"
-
-
-def test_no_power_cycle_before_a_restore_could_ever_be_approved():
-    """Set up while the servers are off: leave the outlets live."""
-    dead = obs(load=170, f=OFF, s=OFF, reserve=None)
-    st = State()
-    assert step(st, dead, 0) == []
-    assert step(st, dead, 900) == []
-    assert st.ctl == IDLE and stuck(st, dead, 900, 900, P) is False
-    # An outage shutdown is never held back by this.
-    st = State()
-    t = shut_down(st)
-    jump(st, obs(battery=True, load=170, f=OFF, s=OFF, reserve=None), t + 15)
-    assert kinds(
-        step(st, obs(battery=True, load=170, f=OFF, s=OFF, reserve=None), t + 135)
-    ) == [("cut", None)]
 
 
 def test_dead_timer_survives_restart_and_resets_on_any_answer():
@@ -417,8 +348,7 @@ def test_wake_only_the_server_that_is_off():
     for blocked in (
         obs(f=BOOTING, s=UP),
         obs(f=ServerObs(False, None), s=UP),
-        obs(f=OFF, s=UP, reserve=20),
-        obs(f=OFF, s=UP, reserve=None),
+        obs(f=OFF, s=UP, charge=79),
     ):
         st = State()
         step(st, blocked, 0)
@@ -440,14 +370,9 @@ def test_grid_down_for_t_grid_shuts_down_while_the_ups_is_still_online():
     assert "grid is down" in acts[0].reason and st.ctl == SHUTDOWN
 
 
-def test_no_grid_shutdown_before_a_restore_could_ever_be_approved():
-    """Just installed: no peak load yet. Saving the battery can wait."""
-    st = State()
-    assert step(st, obs(grid=False, reserve=None), 0) == []
-    assert step(st, obs(grid=False, reserve=None), 900) == []
-    assert st.ctl == IDLE
-    # Nor before the idle load is set: the cut could never be approved, and
-    # the servers would sit shut down on live outlets.
+def test_no_grid_shutdown_before_the_idle_load_is_set():
+    """The cut could never be approved, and the servers would sit shut down
+    on live outlets. Saving the battery can wait."""
     uncalibrated = Params(load_idle_max=None)
     st = State()
     assert step(st, obs(grid=False), 0, uncalibrated) == []
@@ -455,8 +380,8 @@ def test_no_grid_shutdown_before_a_restore_could_ever_be_approved():
     assert st.ctl == IDLE
     st = State()
     # A real outage is never held back by this.
-    step(st, obs(grid=False, reserve=None, battery=True), 915)
-    assert kinds(step(st, obs(grid=False, reserve=None, battery=True), 1035)) == [
+    step(st, obs(grid=False, battery=True), 915, uncalibrated)
+    assert kinds(step(st, obs(grid=False, battery=True), 1035, uncalibrated)) == [
         ("shutdown", "f"),
         ("shutdown", "s"),
     ]

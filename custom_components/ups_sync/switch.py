@@ -29,9 +29,7 @@ def describe(ctl: Controller, key: str) -> str:
     restore = (
         f"after {_min(p.t_hold)} of UPS input"
         + (" with a grid entity showing the grid up" if grid else "")
-        + f", once \"UPS battery charge\" is at least {p.c_restore:g} % "
-        + f"(on a card that does not report charge: once \"Runtime with "
-        + f"servers on\" is at least {p.e_restore:g})"
+        + f", once \"UPS battery charge\" is at least {p.c_restore:g} %"
     )
     if key == "armed":
         return (
@@ -39,7 +37,7 @@ def describe(ctl: Controller, key: str) -> str:
             f"{_min(p.t_ob)} on UPS battery or at once on low battery"
             + (
                 f", or after {_min(p.t_grid)} of the grid entities showing the "
-                "grid down (once calibrated)"
+                "grid down (once the idle load is set)"
                 if grid
                 else ""
             )
@@ -51,9 +49,9 @@ def describe(ctl: Controller, key: str) -> str:
             "switched off by hand. Powers on a server that has been off "
             f"{_min(p.t_wake)} while another runs, if the UPS has input"
             + (" and a grid entity shows the grid up" if grid else "")
-            + f" and \"Runtime with servers on\" is at least {p.e_restore:g}. "
+            + f" and \"UPS battery charge\" is at least {p.c_restore:g} %. "
             f"If every server has been off {_min(cycle)} on live outlets, "
-            "cuts the group (once calibrated) so they boot when it is "
+            "cuts the group (once the idle load is set) so they boot when it is "
             "restored: turn on "
             "Maintenance before shutting them down by hand. "
             "Off: sends no commands, only watches; \"Dry run would do\" "
@@ -84,7 +82,7 @@ def describe(ctl: Controller, key: str) -> str:
         )
         + (
             f" During a grid outage the {_min(p.t_grid)} grid timer starts "
-            "again, then (once calibrated) the servers are shut down."
+            "again, then (once the idle load is set) the servers are shut down."
             if grid
             else ""
         )

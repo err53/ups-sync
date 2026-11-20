@@ -53,8 +53,7 @@
           "t_wake": "Wait before powering on a server that is off while another is up",
           "t_hold": "Input stable this long before restore",
           "t_wait": "Alarm if shutdown takes longer than this",
-          "e_restore": "Runtime with servers on (minutes) required before a server is powered on",
-          "c_restore": "UPS battery charge (%) required before the group is turned back on"
+          "c_restore": "UPS battery charge (%) required before the servers are powered back on"
         }
       }
     }
@@ -74,12 +73,6 @@
       },
       "runtime": {
         "name": "UPS runtime at present load"
-      },
-      "reserve": {
-        "name": "Runtime with servers on"
-      },
-      "peak_load": {
-        "name": "Peak load"
       },
       "would_act": {
         "name": "Dry run would do"

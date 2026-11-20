@@ -187,7 +187,7 @@ class UpsSyncOptionsFlow(OptionsFlow):
             ),
         }
         for key in OPT_TIMINGS:
-            # A zero would act on a single reading; a small reserve is unsafe.
+            # A zero would act on a single reading; a low charge is unsafe.
             schema[vol.Required(key, default=getattr(defaults, key))] = vol.All(
                 vol.Coerce(float),
                 vol.Range(min=MIN_OPTION.get(key, 10), max=MAX_OPTION.get(key)),

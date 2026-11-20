@@ -45,7 +45,7 @@ class UpsReading:
     runtime_min: float
     load_w: float
     group_on: bool
-    charge_pct: float | None = None  # None: the card does not say
+    charge_pct: float
 
 
 def make_engine() -> SnmpEngine:
@@ -60,7 +60,7 @@ def make_engine() -> SnmpEngine:
 
 
 def parse_reading(
-    status: int, runtime: int, watts: int, low: int, group: int, charge: int | None = None
+    status: int, runtime: int, watts: int, low: int, group: int, charge: int
 ) -> UpsReading:
     """Turn raw PowerNet values into a reading, or raise if the state is unclear."""
     on_battery = status == STATUS_ON_BATTERY
@@ -75,7 +75,7 @@ def parse_reading(
         runtime_min=runtime / 6000,
         load_w=float(watts),
         group_on=group == 1,
-        charge_pct=None if charge is None else float(charge),
+        charge_pct=float(charge),
     )
 
 
@@ -100,6 +100,8 @@ class ApcClient:
             raise UpsError(str(err_ind or err_status.prettyPrint()))
         out = []
         for _, val in binds:
+            if isinstance(val, (NoSuchObject, NoSuchInstance, EndOfMibView)):
+                raise UpsError(f"the card does not have {val.__class__.__name__}")
             try:
                 out.append(int(val))
             except (TypeError, ValueError) as exc:  # noSuchObject etc.
@@ -113,6 +115,7 @@ class ApcClient:
             OID_WATTS,
             OID_LOW_BATT,
             f"{OID_GROUP_STATE}.{self._group}",
+            OID_CHARGE,  # required: the restore goes by it
         )
         try:
             err_ind, err_status, _, binds = await get_cmd(
@@ -125,24 +128,9 @@ class ApcClient:
         except Exception as exc:  # pysnmp raises many unrelated types
             raise UpsError(str(exc)) from exc
         values = self._check(err_ind, err_status, binds)
-        return parse_reading(*values, await self._charge())
-
-    async def _charge(self) -> int | None:
-        """Battery charge, which gates a restore. Asked for separately, so a
-        card that cannot answer it, in whatever way, never fails the rest of
-        the reading; the controller then falls back to the runtime estimate."""
-        try:
-            err_ind, err_status, _, binds = await get_cmd(
-                self._engine,
-                self._read,
-                await self._target(timeout=1, retries=0),  # never delay a reading
-                ContextData(),
-                ObjectType(ObjectIdentity(OID_CHARGE)),
-            )
-            (value,) = self._check(err_ind, err_status, binds)
-        except Exception:  # noqa: BLE001  timeout, error status, NoSuchObject
-            return None
-        return value
+        if len(values) != len(oids):
+            raise UpsError(f"expected {len(oids)} values, got {len(values)}")
+        return parse_reading(*values)
 
     async def group_name(self) -> str:
         """The name the card gives this outlet group, or "" if it has none."""

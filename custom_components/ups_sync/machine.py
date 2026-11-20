@@ -32,8 +32,7 @@ class Params:
     t_hold: float = 360  # input stable this long -> restore
     t_wait: float = 1440  # SHUTDOWN longer than this -> alarm only
     t_resend: float = 60  # minimum gap between shutdown commands to one server
-    e_restore: float = 26  # full-load minutes of reserve to wake (or restore, see below)
-    c_restore: float = 80  # % battery charge to restore a cut group
+    c_restore: float = 80  # % battery charge to restore a cut group or wake a server
     load_idle_max: float | None = None  # W; None = not calibrated, never cut
 
 
@@ -51,7 +50,7 @@ class Obs:
     on_battery: bool
     low_battery: bool
     runtime_min: float  # the UPS's estimate at its PRESENT load; display only
-    reserve_min: float | None  # runtime with every server running; None = unknown
+    charge_pct: float  # battery charge from the card, in %
     load_w: float
     group_on: bool
     servers: dict[str, ServerObs]
@@ -64,8 +63,6 @@ class Obs:
     # With no sensor configured: grid_down False, grid_ok True.
     grid_down: bool = False
     grid_ok: bool = True
-    # Battery charge from the card, in %. None = the card does not report it.
-    charge_pct: float | None = None
 
 
 @dataclass
@@ -112,88 +109,28 @@ def cut_guard(obs: Obs, p: Params) -> bool:
 # age at which the controller reports the UPS as unreadable.
 MAX_GAP = 120
 
-# The UPS reports runtime at its PRESENT load. With the servers off that is
-# several times what it will be once they run, so it cannot gate a restore.
-# reserve = runtime x (load now / peak) ^ CURVE is the runtime at the peak:
-# the heaviest load seen while every server was up and running. That is the
-# model's unit, "minutes with every server running". Lead-acid runtime falls
-# faster than load rises; APC's own tables for this UPS give exponents of
-# 1.2 to 1.36. On 2026-11-17 the real UPS's figure fell from 48 to 29 min
-# within two minutes on battery, an effective exponent of about 1.44 against
-# its on-mains figure, so 1.4 can overstate by a few per cent; e_restore's
-# margin covers that. The peak only ever goes up.
-#
-# Readings taken while a server is off or booting are left out on purpose.
-# Standby draw would understate the peak (restore too early). A boot surge
-# would overstate it for good (never restore). A server answers on the
-# network well before its boot is over, so a reading only counts once every
-# server has been reachable without a break for PEAK_SETTLE.
-# e_restore leaves room for a boot that draws up to about twice as much.
-CURVE = 1.4
-PEAK_SETTLE = 300
 
+def enough_charge(obs: Obs, p: Params) -> bool:
+    """May the servers be powered, as far as the battery goes?
 
-def all_up_since(
-    since: float | None, group_on: bool, all_up: bool, mono: float
-) -> float | None:
-    """When the current unbroken stretch of "group on, every server up" began."""
-    return _since(group_on and all_up, since, mono)
+    Decided on the card's battery charge, which does not depend on the load.
+    The card's runtime figure cannot be used: it is measured at the PRESENT
+    load, two to three times too long with the servers off. An earlier
+    version scaled it to the heaviest load seen with an exponent of 1.4.
+    That holds near the peak but halves the figure from the light load of a
+    cut group: on 2026-11-20, at 94 % charge and never on battery, it read
+    20 to 22 with the group cut, under the 26 required, and the group was
+    never restored. The peak it relied on was also raised for good by any
+    extra load on the UPS while the servers ran.
 
-
-def peak_sample(load_w: float, up_since: float | None, mono: float) -> float | None:
-    """This reading, if it may count towards the peak."""
-    settled = up_since is not None and mono - up_since >= PEAK_SETTLE
-    return load_w if settled and load_w > 0 else None
-
-
-def update_peak(
-    peak: float | None, prev_sample: float | None, sample: float | None
-) -> float | None:
-    """Two eligible readings in a row must agree, so one odd sample cannot
-    raise the peak."""
-    if prev_sample is None or sample is None:
-        return peak
-    return max(peak or 0.0, min(prev_sample, sample))
-
-
-def reserve_minutes(
-    runtime_min: float, load_w: float, peak: float | None
-) -> float | None:
-    """Minutes the UPS would last at the peak load. None = unknown."""
-    if not peak:
-        return None
-    return runtime_min * min(1.0, load_w / peak) ** CURVE
-
-
-def _enough_reserve(obs: Obs, p: Params) -> bool:
-    return obs.reserve_min is not None and obs.reserve_min >= p.e_restore
-
-
-def enough_to_restore(obs: Obs, p: Params) -> bool:
-    """May a cut group be switched back on, as far as the battery goes?
-
-    Decided on the card's battery charge, not on reserve_min. With the group
-    cut the load is the rest of the UPS only, a third of the peak or less,
-    and scaling the card's runtime from there to the peak with CURVE halves
-    it: on 2026-11-20, at 94 % charge and never on battery, reserve_min read
-    38 with the servers running and 20 to 22 with the group cut, so a group
-    cut by the grid trigger could never be restored. The card's own figures
-    that night (109 to 137 min at about 155 W, 52 min at 436 W) put its
-    curve between those loads near 0.7. CURVE is right near the peak, which
-    is where a wake is decided, so a wake still uses reserve_min.
-
-    Charge does not depend on the load. c_restore % of a full battery must
-    stay at least e_restore minutes with the servers running, the margin the
-    runtime rule always had (a boot drawing up to twice the running load,
-    then a shutdown, then the shed margin): at 80 % the battery must hold
-    32.5, against about 41 today. c_restore must also stay below the highest
-    charge the card reaches (93 to 94 % on this battery), or the group is
-    never restored. A card that does not report charge falls back to
-    reserve_min.
+    c_restore % of a full battery must stay at least 26 minutes with the
+    servers running: a boot drawing up to twice the running load, then a
+    shutdown, then the card's shed margin (formal/RESULTS.md). At 80 % the
+    battery must hold 32.5. c_restore must also stay below the highest
+    charge the card reaches (93 to 94 % on this install), or nothing is
+    ever restored.
     """
-    if obs.charge_pct is not None:
-        return obs.charge_pct >= p.c_restore
-    return _enough_reserve(obs, p)
+    return obs.charge_pct >= p.c_restore
 
 
 RESTORE_OVERDUE = 6 * 3600
@@ -292,14 +229,13 @@ def decide(
         # DoShut. The grid-sensor trigger saves the upstream battery for the
         # loads that must stay up. It is an economy, not a safety rule, so
         # maintenance turns it off; the on-battery triggers always apply.
-        # It also waits until the controller is calibrated (idle load set,
-        # peak load known), so that the cut and the wake-ups that follow can
-        # be approved: an economy must not turn the servers off for good.
+        # It also waits until the idle load is set, so that the cut that
+        # follows can be approved: an economy must not leave the servers
+        # shut down on live outlets.
         on_battery = obs.on_battery and _held(st.ob_since, mono, p.t_ob)
         on_grid_loss = (
             not maintenance
             and p.load_idle_max is not None
-            and obs.reserve_min is not None
             and _held(st.grid_since, mono, p.t_grid)
         )
         if obs.group_on and (obs.low_battery or on_battery or on_grid_loss):
@@ -320,12 +256,8 @@ def decide(
             return acts
         # DoRecov. dead_since survives restarts and may be stale, so this
         # process must also have watched the darkness itself for t_grace.
-        # No peak load yet means the controller is not calibrated (and on a
-        # card without a charge reading no restore could be approved): leave
-        # the outlets live so a person can simply power the servers on.
         if (
             cut_guard(obs, p)
-            and obs.reserve_min is not None
             and _held(st.dead_since, wall, p.t_dead)
             and _held(st.seen_dark_since, mono, p.t_grace)
         ):
@@ -335,7 +267,7 @@ def decide(
             _held(st.partial_since, mono, p.t_wake)
             and obs.input_present
             and obs.grid_ok
-            and _enough_reserve(obs, p)
+            and enough_charge(obs, p)
         ):
             for name, s in obs.servers.items():
                 if not s.reachable and s.chassis_on is False:
@@ -371,7 +303,7 @@ def decide(
         and not obs.group_on
         and obs.input_present
         and _held(st.hold_since, mono, p.t_hold)  # counts only with the grid up
-        and enough_to_restore(obs, p)
+        and enough_charge(obs, p)
     ):
         return [Action("restore", reason="input stable")]
     return acts

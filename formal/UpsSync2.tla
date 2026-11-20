@@ -9,14 +9,14 @@
 (*                                                                         *)
 (* Assumptions (documented): nobody presses power buttons or runs poweroff *)
 (* by hand while the UPS is on battery, and nobody powers a server ON      *)
-(* while the UPS has less than E_RESTORE minutes of runtime.               *)
+(* while the battery charge is below C_RESTORE.                           *)
 (***************************************************************************)
 EXTENDS Naturals, TLC
 
 CONSTANTS
   Servers,
   EMAX, DRAIN_HI, DRAIN_LO, CHARGE, DMAX, SMAX, NET_TAIL, BMAX,
-  T_OB, T_GRACE, T_DEAD, T_WOL, T_WAIT, T_HOLD, E_RESTORE, E_SHED, E_LB, E_RETURN,
+  T_OB, T_GRACE, T_DEAD, T_WOL, T_WAIT, T_HOLD, E_SHED, E_LB, E_RETURN,
   C_RESTORE,   \* restore needs the battery charge at C_RESTORE % of EMAX (see UpsSync.tla)
   T_SRV_OB, HA_CAN_FAIL, DIRECT_MON,
   GS,          \* grid sensor: "off" | "true" | "any" (see UpsSync.tla)
@@ -76,9 +76,9 @@ ChargeOk == e * 100 >= C_RESTORE * EMAX
 DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ ChargeOk
 \* Partial outage leftover: some server is down while another is up. Cycling the group would
 \* hard-cut the running one, so wake the down one with Wake-on-LAN instead (harmless if it is
-\* already booting). Same runtime margin as a restore.
+\* already booting). Same charge as a restore.
 Partial  == Power2 /\ AnyReach /\ \E i \in Servers : ~Reach(i)
-DoWol    == HaUp /\ ctl = "IDLE" /\ Partial /\ ApcIn /\ ~GsDown /\ e >= E_RESTORE /\ wolT >= T_WOL
+DoWol    == HaUp /\ ctl = "IDLE" /\ Partial /\ ApcIn /\ ~GsDown /\ ChargeOk /\ wolT >= T_WOL
 
 SrvBackstop(i) == srv[i] = "RUN" /\ SrvSignal
                   /\ (LB \/ (T_SRV_OB > 0 /\ ~ApcIn /\ srvObT >= T_SRV_OB))
@@ -88,7 +88,7 @@ NmcMayReturn == ~g2 /\ g2by = "ha"  /\ ApcIn /\ e >= E_RETURN
 
 \* Manual actions only while input power is present
 OffCand == IF HUMAN /\ ApcIn THEN {i \in Servers : srv[i] = "RUN"} ELSE {}
-OnCand  == IF HUMAN /\ ApcIn /\ e >= E_RESTORE THEN {i \in Servers : srv[i] = "OFF"} ELSE {}  \* assumption: no manual power-on below restore runtime
+OnCand  == IF HUMAN /\ ApcIn /\ ChargeOk THEN {i \in Servers : srv[i] = "OFF"} ELSE {}  \* assumption: no manual power-on below the restore charge
 CmdSet(mOff)  == {i \in Servers : srv[i] = "RUN" /\ (HaCmd(i) \/ SrvBackstop(i) \/ i \in mOff)}
 ShutSet(mOff) == CmdSet(mOff) \cup {i \in Servers : srv[i] = "SHUT"}
 OffSet == {i \in Servers : srv[i] = "OFF"}

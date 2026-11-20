@@ -13,8 +13,8 @@ async def test_readings_are_sensors(hass, rig):
     await setup(hass, rig, {"load_idle_max": 210})
     assert state(hass, "sensor.ups_sync_ups_load") == "400.0"
     assert state(hass, "sensor.ups_sync_ups_runtime_at_present_load") == "57.0"
-    assert state(hass, "sensor.ups_sync_runtime_with_servers_on") == "57.0"
-    assert state(hass, "sensor.ups_sync_peak_load") == "400.0"
+    assert hass.states.get("sensor.ups_sync_runtime_with_servers_on") is None
+    assert hass.states.get("sensor.ups_sync_peak_load") is None
     assert state(hass, "sensor.ups_sync_ups_battery_charge") == "100.0"
     assert state(hass, "sensor.ups_sync_dry_run_would_do") == "Nothing"
     assert state(hass, "binary_sensor.ups_sync_calibrated") == "on"
@@ -64,14 +64,14 @@ async def test_readings_go_unavailable_when_the_ups_stops_answering(hass, rig):
     await rig.run(ctl, 195)
     for entity_id in (
         "sensor.ups_sync_ups_load",
-        "sensor.ups_sync_runtime_with_servers_on",
+        "sensor.ups_sync_ups_battery_charge",
         "binary_sensor.ups_sync_ups_input",
         "binary_sensor.ups_sync_outlet_group",
         "binary_sensor.ups_sync_s_power",
     ):
         assert state(hass, entity_id) == "unavailable"
     # What the controller itself knows stays readable.
-    assert state(hass, "sensor.ups_sync_peak_load") == "400.0"
+    assert state(hass, "binary_sensor.ups_sync_calibrated") == "on"
     assert state(hass, "binary_sensor.ups_sync_problem") == "on"
     assert state(hass, "sensor.ups_sync_last_error").startswith("UPS:")
 
@@ -93,14 +93,11 @@ async def test_grid_sensor_is_on_off_or_unknown(hass, rig):
     assert state(hass, "binary_sensor.ups_sync_grid") == "unknown"
 
 
-async def test_battery_charge_follows_the_card_and_is_unknown_without_it(hass, rig):
+async def test_battery_charge_follows_the_card(hass, rig):
     ctl = await setup(hass, rig)
     rig.set(charge_pct=74.0)
     await rig.run(ctl, 15)
     assert state(hass, "sensor.ups_sync_ups_battery_charge") == "74.0"
-    rig.set(charge_pct=None)  # a card that does not report it
-    await rig.run(ctl, 15)
-    assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unknown"
     rig.read_error = "timeout"
     await rig.run(ctl, 15)
     assert state(hass, "sensor.ups_sync_ups_battery_charge") == "unavailable"
@@ -129,14 +126,15 @@ def test_the_descriptions_use_this_installs_timings():
 
     ctl = SimpleNamespace(
         params=Params(
-            t_ob=180, t_grid=600, e_restore=30, c_restore=85, t_wake=60, t_dead=1800,
+            t_ob=180, t_grid=600, c_restore=85, t_wake=60, t_dead=1800,
             t_grace=1200,
         ),
         grid_entities=[],
     )
     armed, maint = describe(ctl, "armed"), describe(ctl, "maintenance")
-    assert "after 3 min on UPS battery" in armed and "at least 30" in armed
-    assert '"UPS battery charge" is at least 85 %' in armed
+    assert "after 3 min on UPS battery" in armed
+    assert armed.count('"UPS battery charge" is at least 85 %') == 2  # restore, wake
+    assert "Runtime with servers on" not in armed + describe(ctl, "maintenance")
     assert '"UPS battery charge" is at least 85 %' in maint
     # Reviewer cases: the cut is at the earlier deadline, and waking uses
     # the wake time, not the dead time.
@@ -165,3 +163,27 @@ async def test_the_description_is_not_kept_in_history(hass, rig):
     from custom_components.ups_sync.switch import FlagSwitch
 
     assert "description" in FlagSwitch._unrecorded_attributes
+
+
+async def test_sensors_of_earlier_versions_are_removed(hass, rig):
+    """ "Runtime with servers on" and "Peak load" no longer decide anything."""
+    from homeassistant.helpers import entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.ups_sync.const import DOMAIN
+    from tests.test_integration import SERVERS, UPS
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={**UPS, "servers": SERVERS}, options={"load_idle_max": 210}
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for key in ("reserve", "peak_load"):
+        registry.async_get_or_create(
+            "sensor", DOMAIN, f"{entry.entry_id}_{key}", config_entry=entry
+        )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for key in ("reserve", "peak_load"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}") is None
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_charge")
