@@ -265,15 +265,15 @@ class World:
             if self.off_by == "dead" or (not self.settling and r.random() < 0.01):
                 self.set_group(True, "ha")
 
-        # Humans, within the documented assumptions.
-        # Humans power servers on only at the restore charge, as the runbook says.
-        if self.humans and not self.settling and self.input and self.charge() >= P.c_restore:
+        # Humans, within the documented assumptions: anything while there is
+        # input, but a power-on only at the restore charge.
+        if self.humans and not self.settling and self.input:
             if r.random() < 1 / 400:
                 n = r.choice(NAMES)
                 if self.srv[n] == "RUN":
                     self.begin_shutdown(n)
                     self.manual.add(n)
-                elif self.srv[n] == "OFF" and self.powered():
+                elif self.srv[n] == "OFF" and self.powered() and self.charge() >= P.c_restore:
                     self.begin_boot(n)
                     self.manual.discard(n)
 

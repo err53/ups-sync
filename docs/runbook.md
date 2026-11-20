@@ -75,10 +75,12 @@ Do these once, in order, when you can watch the servers.
   empty that took 42 minutes on 2026-11-20; a grid outage that the home
   battery carried leaves the charge where it was, so the servers come
   back 6 minutes after the grid.
-  Nothing goes by the UPS's runtime figure. It is measured at the present
-  load, two to three times too long with the servers off, and an earlier
-  version that scaled it to the servers' load left a group cut on
-  2026-11-20 at 94 % charge for good.
+  No restore or wake goes by the UPS's runtime figure. It is measured at
+  the present load, two to three times too long with the servers off, and
+  an earlier version that scaled it to the servers' load left a group cut
+  on 2026-11-20 at 94 % charge for good. On battery the runtime still sets
+  the low-battery flag (below the card's low-battery duration), which
+  shuts the servers down at once.
 - The card's charge has topped out at 93 to 94 % on this battery. Keep
   the restore-charge setting well under that, or the group is never
   restored; the problem sensor turns on after six hours of waiting.
@@ -136,8 +138,10 @@ on mains, as the old battery's did.
   Assistant alone (about 155 W) plus a steady resistive load, such as an
   oil-filled heater on its lowest setting with its thermostat turned up,
   in a group 2 outlet, starting from a full charge.
-- The extra load on the UPS does not affect the integration: nothing it
-  decides depends on the UPS load except the cut guard.
+- With the servers off and Maintenance on, the extra load changes nothing
+  the integration would do. The heavier load does shorten the runtime, so
+  the card reports low battery sooner during the calibration; with the
+  servers already off that only means nothing more to shut down.
 
 ## Maintenance
 

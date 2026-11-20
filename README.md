@@ -146,7 +146,7 @@ counts as a problem. Only Armed decides whether anything is sent.
 | `switch.ups_sync_armed` | off: observe only. on: act. See [Armed and Maintenance](#armed-and-maintenance). |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Shutdown on UPS battery still works. See [Armed and Maintenance](#armed-and-maintenance). |
 | UPS load, UPS battery charge | the numbers the controller works from: the load for the cut guard, the charge for every restore and wake |
-| UPS runtime at present load | the card's own estimate, for display and the runbook's capacity check; it decides nothing |
+| UPS runtime at present load | the card's own estimate. On battery it sets the low-battery flag (below the card's low-battery duration), which shuts the servers down at once; restores and wakes do not use it |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
 | `<server>` reachable, `<server>` power | per server: answers on the network, chassis powered (from the iDRAC) |
 | Calibrated | on once the idle load is set |
@@ -169,6 +169,11 @@ down and are part of what was verified:
   reports low battery at 16 min ([scripts/cutover.sh](scripts/cutover.sh)).
 - The card's minimum return runtime for the group is 60 min, its maximum.
 - Each server's BIOS powers on when AC returns.
+- The card reports its battery charge (PowerNet `upsAdvBatteryCapacity`).
+  Every restore and wake goes by it, and from version 0.6.0 a card that
+  does not answer it is reported as unreadable, so nothing is shut down
+  by the integration. Check the "UPS battery charge" sensor shows a figure
+  before upgrading.
 
 ## Development
 

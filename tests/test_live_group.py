@@ -49,7 +49,7 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
                          "idrac_host": "127.0.0.1", "idrac_user": "x", "idrac_password": "x"}],
         },
         # The group is empty, so the whole UPS load counts as "idle" here.
-        options={"load_idle_max": 100000, "t_hold": 4, "t_dead": 4, "t_grace": 2, "c_restore": 50},
+        options={"load_idle_max": 100000, "t_hold": 4, "t_dead": 4, "t_grace": 2},
     )
     entry.add_to_hass(hass)
     server = "custom_components.ups_sync.servers.Server"
