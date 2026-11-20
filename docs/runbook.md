@@ -24,9 +24,11 @@ Do these once, in order, when you can watch the servers.
    the servers on". It only ever rises.
    If the integration is added while a server is off, Peak load stays
    unknown and the problem sensor stays on. Until both servers have been seen
-   running, nothing is power-cycled or restored. An outage still shuts the
-   servers down and cuts the group, and the group then stays off until you
-   turn it on by hand.
+   running, nothing is power-cycled or woken and the grid entities cannot
+   start a shutdown. An outage on UPS battery still shuts the servers down
+   and cuts the group, and it is restored by battery charge as usual (on a
+   card that does not report charge, it stays off until you turn it on by
+   hand).
    To reset it (for example after a one-off heavy load on the UPS), remove
    the integration and add it again with both servers running.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
@@ -62,13 +64,10 @@ Do these once, in order, when you can watch the servers.
 10. **Real test.** Pull the UPS input. Expect: shutdown commands at 2 min,
    both servers off within 8 more, group cut about 2 min after the last one
    goes quiet. Restore input. Expect the group back on once input has been
-   stable for 6 min **and** the "Runtime with servers on" sensor reads 26
-   or more (the default of the restore-reserve option), then both servers
-   booting on their own. Start with the "UPS
-   battery charge" sensor at 100 %. Otherwise the restore may wait a long
-   time: on 2026-11-17 a test started at about 80 % charge, six minutes on
-   battery left it at 74 %, and "Runtime with servers on" sat at 16 to 18
-   for over twenty minutes after input returned.
+   stable for 6 min **and** the "UPS battery charge" sensor reads 80 % or
+   more (the default of the restore-charge option), then both servers
+   booting on their own. If the test leaves the charge under 80 %, the
+   restore waits for the UPS to recharge that far.
    This is the first time either shutdown channel is used for real.
 11. **Home Assistant down test.** Stop Home Assistant, pull the UPS input,
     and confirm both servers shut themselves down after 10 minutes on
@@ -78,19 +77,25 @@ Do these once, in order, when you can watch the servers.
 ## During an outage
 
 - Do nothing. Do not press power buttons while the UPS is on battery.
-- Do not power a server on by hand while "Runtime with servers on" is
-  under 26 (or your restore-reserve setting). Let the controller do it.
-  The runtime the UPS shows with the servers off is several times what it
+- Do not power a server on by hand while "UPS battery charge" is under
+  80 % (or your restore-charge setting). Let the controller do it. The
+  runtime the UPS shows with the servers off is several times what it
   will be once they are running.
-- **After an outage the restore can take a while.** It waits until the
-  battery has recharged enough to carry the servers through another
-  outage, and that wait is real, not a reading that is too cautious. On
-  2026-11-17 the UPS said 48 minutes at full load on mains and 29 minutes
-  two minutes into the outage. "Runtime with servers on" is scaled with a
-  fixed exponent of 1.4. Measured against what the battery did on battery
-  that night the exponent was about 1.44, so 1.4 is about 4 % optimistic at
-  that load, which the restore threshold's margin covers. It is not a
-  setting, and a slow restore is not a reason to want it lower.
+- **After an outage the restore waits for the battery charge** to reach
+  80 %, so that the servers can get through another outage. After a long
+  outage that is a real recharge and can take a while.
+  It does not go by "Runtime with servers on" any more. That figure scales
+  the UPS's runtime to the servers' load with a fixed exponent of 1.4,
+  which fits near full load (about 1.44 measured on battery on
+  2026-11-17), but with the group cut it scales from about 155 W and
+  halves the result. On 2026-11-20 a grid-only shutdown, with the charge at
+  94 % and the UPS never on battery, left it at 20 to 22, under the old
+  threshold of 26, and the group was never restored. A wake (one server
+  off while the other runs) still uses it, because the load is then near
+  the peak.
+- The card's charge has topped out at 93 to 94 % on this battery. Keep
+  the restore-charge setting well under that, or the group is never
+  restored; the problem sensor turns on after six hours of waiting.
 - **With grid entities configured:** five minutes after the grid goes, the
   servers shut down and their group is cut, whichever way the transfer
   switch is set. They stay off until the grid is back and has been stable
@@ -111,8 +116,8 @@ Do these once, in order, when you can watch the servers.
   the battery within two minutes of the outage avoids a shutdown. Later
   than that, the shutdown runs to the end and the servers come back once
   the UPS has had input for six minutes, even if that input is the home
-  battery, and "Runtime with servers on" reads 26 or more (or your
-  restore-reserve setting).
+  battery, and "UPS battery charge" reads 80 % or more (or your
+  restore-charge setting).
 
 ## The UPS battery
 

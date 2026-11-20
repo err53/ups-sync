@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     OPT_LOAD_IDLE_MAX,
     OPT_NOTIFY,
+    MAX_OPTION,
     MIN_OPTION,
     OPT_GRID,
     OPT_TIMINGS,
@@ -188,7 +189,8 @@ class UpsSyncOptionsFlow(OptionsFlow):
         for key in OPT_TIMINGS:
             # A zero would act on a single reading; a small reserve is unsafe.
             schema[vol.Required(key, default=getattr(defaults, key))] = vol.All(
-                vol.Coerce(float), vol.Range(min=MIN_OPTION.get(key, 10))
+                vol.Coerce(float),
+                vol.Range(min=MIN_OPTION.get(key, 10), max=MAX_OPTION.get(key)),
             )
         return self.async_show_form(
             step_id="init",

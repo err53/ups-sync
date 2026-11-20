@@ -53,7 +53,8 @@
           "t_wake": "Wait before powering on a server that is off while another is up",
           "t_hold": "Input stable this long before restore",
           "t_wait": "Alarm if shutdown takes longer than this",
-          "e_restore": "UPS runtime (minutes) required before restore"
+          "e_restore": "Runtime with servers on (minutes) required before a server is powered on",
+          "c_restore": "UPS battery charge (%) required before the group is turned back on"
         }
       }
     }

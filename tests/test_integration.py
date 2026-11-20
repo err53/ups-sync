@@ -213,18 +213,21 @@ async def test_armed_full_cycle(hass, rig):
 
     # The group is off, so the UPS reports a long runtime: 90 min at 150 W.
     # At the 400 W the servers were seen to draw that is only 23 min.
-    rig.set(group_on=False, load_w=150.0, runtime_min=90.0)
+    rig.set(group_on=False, load_w=150.0, runtime_min=90.0, charge_pct=70.0)
     await rig.run(ctl, 15)
     assert hass.states.get("sensor.ups_sync_state").state == "cut"
     assert ctl.peak == 400.0  # not dragged down by the light load
     rig.set(input_present=True, on_battery=False)
     await rig.run(ctl, 600)
-    assert ("group", True) not in rig.calls
+    assert ("group", True) not in rig.calls  # 70 % is below the 80 % default
     assert round(ctl.obs.reserve_min) == 23
 
-    rig.set(runtime_min=110.0)  # 28 min at 400 W
+    # The restore goes by charge alone: the runtime figure scaled from the
+    # light load would hold it back for no reason (2026-11-20).
+    rig.set(charge_pct=80.0)
     await rig.run(ctl, 15)
     assert rig.calls[-1] == ("group", True)
+    assert round(ctl.obs.reserve_min) == 23
     rig.set(group_on=True)
     await rig.run(ctl, 15)
     assert hass.states.get("sensor.ups_sync_state").state == "idle"
@@ -276,8 +279,10 @@ async def test_failing_group_command_raises_problem_and_notifies_once(hass, rig)
 
 
 async def test_peak_load_is_not_learned_while_the_group_is_off(hass, rig):
-    """Before any full-load reading, a restore must be refused, not guessed."""
-    rig.set(group_on=False, load_w=150.0, runtime_min=150.0)
+    """Before any full-load reading there is no runtime with the servers on.
+    A card without a charge reading cannot have its restore approved; with
+    one, the restore goes by charge and does not need the peak."""
+    rig.set(group_on=False, load_w=150.0, runtime_min=150.0, charge_pct=None)
     rig.reach = dict.fromkeys(rig.reach, False)
     rig.chassis = dict.fromkeys(rig.chassis, None)
     ctl = await setup(hass, rig, {"load_idle_max": 210})
@@ -285,6 +290,11 @@ async def test_peak_load_is_not_learned_while_the_group_is_off(hass, rig):
     await rig.run(ctl, 900)
     assert ctl.peak is None and ctl.obs.reserve_min is None
     assert rig.calls == [] and not ctl.calibrated and ctl.problem
+
+    rig.set(charge_pct=100.0)
+    await rig.run(ctl, 15)
+    assert rig.calls == [("group", True)]
+    assert ctl.peak is None and not ctl.calibrated
 
 
 async def test_peak_load_ignores_standby_and_boot_readings(hass, rig):

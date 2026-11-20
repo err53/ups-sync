@@ -35,7 +35,7 @@ written; see the state diagram in
 | --- | --- | --- |
 | Idle | group on | grid down for 5 min, UPS on battery for 2 min, or low battery: shut the servers down |
 | Shutting down | servers told to power off | all servers are off and the UPS load confirms it: cut the group |
-| Power cut | group off | grid back and UPS input stable for 6 min, with enough charge to run every server for 26 min: turn the group on |
+| Power cut | group off | grid back and UPS input stable for 6 min, with the UPS battery charged to 80 %: turn the group on |
 
 Two extra rules run while idle. If every server is off but the outlets are
 live, the group is power-cycled so the servers boot. If one server is off
@@ -96,8 +96,10 @@ except the 6 hours for an overdue restore.
     after the last one goes quiet if every shutdown was accepted, or 10 min
     after regardless, whichever comes first.
   - Turns the group back on after 6 min of UPS input (with a grid entity
-    showing the grid up, if any are set) once "Runtime with servers on" is
-    at least 26. The same rule restores a group you switch off by hand.
+    showing the grid up, if any are set) once "UPS battery charge" is at
+    least 80 %. The same rule restores a group you switch off by hand. On a
+    card that does not report its charge, it waits for "Runtime with
+    servers on" to reach 26 instead.
     Until a grid entity shows the grid up (the grid is still down, or the
     entities are missing, which `grid_entities_missing` lists),
     `waiting_for_grid` on the state sensor is on.
@@ -145,7 +147,7 @@ counts as a problem. Only Armed decides whether anything is sent.
 | `switch.ups_sync_armed` | off: observe only. on: act. See [Armed and Maintenance](#armed-and-maintenance). |
 | `switch.ups_sync_maintenance` | on: never power-cycle, wake, or restore. Shutdown on UPS battery still works. See [Armed and Maintenance](#armed-and-maintenance). |
 | UPS load, UPS runtime at present load, Runtime with servers on, Peak load | the numbers the controller works from |
-| UPS battery charge | the card's charge reading, for display only; unknown on a card that does not report it |
+| UPS battery charge | the card's charge reading, which decides when a cut group is turned back on; unknown on a card that does not report it |
 | UPS input, On battery, Low battery, Outlet group, Grid | what the UPS and the grid entities report. Grid exists only when grid entities are set, and is unknown when none of them says anything. |
 | `<server>` reachable, `<server>` power | per server: answers on the network, chassis powered (from the iDRAC) |
 | Calibrated | on once the peak load is learned and the idle load is set |

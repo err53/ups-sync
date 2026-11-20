@@ -25,7 +25,15 @@ BOOTING = ServerObs(False, True)
 
 
 def obs(
-    battery=False, low=False, reserve=57, load=400, group=True, f=UP, s=UP, grid=True
+    battery=False,
+    low=False,
+    reserve=57,
+    load=400,
+    group=True,
+    f=UP,
+    s=UP,
+    grid=True,
+    charge=None,
 ):
     return Obs(
         input_present=not battery,
@@ -38,6 +46,7 @@ def obs(
         servers={"f": f, "s": s},
         grid_down=grid is False,
         grid_ok=grid is True,
+        charge_pct=charge,
     )
 
 
@@ -216,6 +225,40 @@ def test_restore_needs_stable_input_and_reserve():
     assert kinds(step(st, obs(**off), 360)) == [("restore", None)]
     assert step(st, obs(battery=True, **off), 375) == []
     assert step(st, obs(**off), 390) == []  # hold timer restarted
+
+
+def test_restore_goes_by_charge_when_the_card_reports_it():
+    """2026-11-20: a grid-trigger shutdown at 94 % charge, the UPS never on
+    battery. With the group cut, the runtime scaled to the peak read 20 to
+    22, under e_restore, and the group was never restored."""
+    st = State(ctl=CUT)
+    off = dict(group=False, f=OFF, s=OFF, load=155)
+    assert step(st, obs(reserve=20.6, charge=94, **off), 0) == []
+    assert step(st, obs(reserve=20.6, charge=94, **off), 359) == []
+    assert kinds(step(st, obs(reserve=20.6, charge=94, **off), 360)) == [
+        ("restore", None)
+    ]
+    st = State(ctl=CUT)
+    assert step(st, obs(reserve=57, charge=79, **off), 0) == []
+    assert step(st, obs(reserve=57, charge=79, **off), 3600) == []  # charge decides
+    assert kinds(step(st, obs(reserve=None, charge=80, **off), 3615)) == [
+        ("restore", None)
+    ]
+    st = State(ctl=CUT)
+    p = Params(load_idle_max=210, c_restore=95)
+    assert step(st, obs(charge=94, **off), 0, p) == []
+    assert step(st, obs(charge=94, **off), 3600, p) == []
+    assert step(st, obs(charge=94, **off), 3600, p, maintenance=True) == []
+
+
+def test_a_wake_still_goes_by_runtime_with_servers_on():
+    """With one server running the load is near the peak, where the scaling
+    holds; a full battery does not excuse a short runtime."""
+    st = State()
+    part = dict(f=OFF, s=UP)
+    assert step(st, obs(reserve=20, charge=100, **part), 0) == []
+    assert step(st, obs(reserve=20, charge=100, **part), 900) == []
+    assert kinds(step(st, obs(reserve=30, charge=10, **part), 915)) == [("wake", "f")]
 
 
 def test_restore_waits_t_hold_after_the_cut_even_if_input_was_stable_for_days():

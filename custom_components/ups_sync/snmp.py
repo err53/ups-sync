@@ -128,9 +128,9 @@ class ApcClient:
         return parse_reading(*values, await self._charge())
 
     async def _charge(self) -> int | None:
-        """Battery charge, for display only. Asked for separately, so a card
-        that cannot answer it, in whatever way, never fails the reading the
-        controller acts on."""
+        """Battery charge, which gates a restore. Asked for separately, so a
+        card that cannot answer it, in whatever way, never fails the rest of
+        the reading; the controller then falls back to the runtime estimate."""
         try:
             err_ind, err_status, _, binds = await get_cmd(
                 self._engine,

@@ -29,7 +29,9 @@ def describe(ctl: Controller, key: str) -> str:
     restore = (
         f"after {_min(p.t_hold)} of UPS input"
         + (" with a grid entity showing the grid up" if grid else "")
-        + f", once \"Runtime with servers on\" is at least {p.e_restore:g}"
+        + f", once \"UPS battery charge\" is at least {p.c_restore:g} % "
+        + f"(on a card that does not report charge: once \"Runtime with "
+        + f"servers on\" is at least {p.e_restore:g})"
     )
     if key == "armed":
         return (

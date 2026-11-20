@@ -17,6 +17,7 @@ CONSTANTS
   Servers,
   EMAX, DRAIN_HI, DRAIN_LO, CHARGE, DMAX, SMAX, NET_TAIL, BMAX,
   T_OB, T_GRACE, T_DEAD, T_WOL, T_WAIT, T_HOLD, E_RESTORE, E_SHED, E_LB, E_RETURN,
+  C_RESTORE,   \* restore needs the battery charge at C_RESTORE % of EMAX (see UpsSync.tla)
   T_SRV_OB, HA_CAN_FAIL, DIRECT_MON,
   GS,          \* grid sensor: "off" | "true" | "any" (see UpsSync.tla)
   T_GS,        \* ticks the grid sensor must read down before shutdown is started
@@ -71,7 +72,8 @@ HaCmd(i) == InShut /\ srv[i] = "RUN" /\ Reach(i)
 DoCutOk  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ ~AnyReach /\ ~LoadHigh
             /\ ((AllAcked /\ darkT >= T_GRACE) \/ darkT >= T_DEAD)
 DoCutTO  == HaUp /\ ctl = "SHUTDOWN" /\ g2 /\ waitT >= T_WAIT /\ ~DoCutOk
-DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ e >= E_RESTORE
+ChargeOk == e * 100 >= C_RESTORE * EMAX
+DoRest   == HaUp /\ ctl = "CUT" /\ ~g2 /\ ApcIn /\ ~GsDown /\ holdT >= T_HOLD /\ ChargeOk
 \* Partial outage leftover: some server is down while another is up. Cycling the group would
 \* hard-cut the running one, so wake the down one with Wake-on-LAN instead (harmless if it is
 \* already booting). Same runtime margin as a restore.

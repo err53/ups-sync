@@ -32,7 +32,8 @@ class Params:
     t_hold: float = 360  # input stable this long -> restore
     t_wait: float = 1440  # SHUTDOWN longer than this -> alarm only
     t_resend: float = 60  # minimum gap between shutdown commands to one server
-    e_restore: float = 26  # full-load minutes of reserve to restore or wake
+    e_restore: float = 26  # full-load minutes of reserve to wake (or restore, see below)
+    c_restore: float = 80  # % battery charge to restore a cut group
     load_idle_max: float | None = None  # W; None = not calibrated, never cut
 
 
@@ -63,6 +64,8 @@ class Obs:
     # With no sensor configured: grid_down False, grid_ok True.
     grid_down: bool = False
     grid_ok: bool = True
+    # Battery charge from the card, in %. None = the card does not report it.
+    charge_pct: float | None = None
 
 
 @dataclass
@@ -166,6 +169,31 @@ def _enough_reserve(obs: Obs, p: Params) -> bool:
     return obs.reserve_min is not None and obs.reserve_min >= p.e_restore
 
 
+def enough_to_restore(obs: Obs, p: Params) -> bool:
+    """May a cut group be switched back on, as far as the battery goes?
+
+    Decided on the card's battery charge, not on reserve_min. With the group
+    cut the load is the rest of the UPS only, a third of the peak or less,
+    and scaling the card's runtime from there to the peak with CURVE halves
+    it: on 2026-11-20, at 94 % charge and never on battery, reserve_min read
+    38 with the servers running and 20 to 22 with the group cut, so a group
+    cut by the grid trigger could never be restored. The card's own figures
+    that night (109 to 137 min at about 155 W, 52 min at 436 W) put its
+    curve between those loads near 0.7. CURVE is right near the peak, which
+    is where a wake is decided, so a wake still uses reserve_min.
+
+    Charge does not depend on the load. c_restore must leave the bound in
+    formal/RESULTS.md (enough for a boot, a shutdown and the shed margin,
+    17 min with the servers running) as the battery ages, and stay below
+    the highest charge the card reaches (93 to 94 % on this battery), or the
+    group is never restored. A card that does not report charge falls back
+    to reserve_min.
+    """
+    if obs.charge_pct is not None:
+        return obs.charge_pct >= p.c_restore
+    return _enough_reserve(obs, p)
+
+
 RESTORE_OVERDUE = 6 * 3600
 
 
@@ -173,7 +201,7 @@ def stuck(st: State, obs: Obs, mono: float, wall: float, p: Params) -> bool:
     """Servers are off and the controller cannot bring them back.
 
     Idle: every server silent for t_dead, yet the guard refuses the cycle.
-    Cut: for hours the UPS has had input, yet no restore: the reserve still
+    Cut: for hours the UPS has had input, yet no restore: the charge still
     falls short, or the grid sensor has not confirmed the grid in all that
     time. The second may be a real long outage or a sensor that has stopped
     working; either way a person should know.
@@ -262,9 +290,9 @@ def decide(
         # DoShut. The grid-sensor trigger saves the upstream battery for the
         # loads that must stay up. It is an economy, not a safety rule, so
         # maintenance turns it off; the on-battery triggers always apply.
-        # It also waits until the cut and the restore that follow could be
-        # approved (idle load set, peak load known): an economy must not
-        # turn the servers off for good.
+        # It also waits until the controller is calibrated (idle load set,
+        # peak load known), so that the cut and the wake-ups that follow can
+        # be approved: an economy must not turn the servers off for good.
         on_battery = obs.on_battery and _held(st.ob_since, mono, p.t_ob)
         on_grid_loss = (
             not maintenance
@@ -290,7 +318,8 @@ def decide(
             return acts
         # DoRecov. dead_since survives restarts and may be stale, so this
         # process must also have watched the darkness itself for t_grace.
-        # No peak load yet means a restore could never be approved: leave
+        # No peak load yet means the controller is not calibrated (and on a
+        # card without a charge reading no restore could be approved): leave
         # the outlets live so a person can simply power the servers on.
         if (
             cut_guard(obs, p)
@@ -340,7 +369,7 @@ def decide(
         and not obs.group_on
         and obs.input_present
         and _held(st.hold_since, mono, p.t_hold)  # counts only with the grid up
-        and _enough_reserve(obs, p)
+        and enough_to_restore(obs, p)
     ):
         return [Action("restore", reason="input stable")]
     return acts
