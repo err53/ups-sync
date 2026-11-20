@@ -25,8 +25,8 @@ OPT_TIMINGS = (
 )
 # Lowest value the options form accepts. Default 10 s.
 # e_restore: formal/RESULTS.md needs shed + boot + shutdown = 17 min at least.
-# c_restore: the same 17 min out of a full battery's 41 or so with the
-#   servers running, with room for the battery to age.
+# c_restore: c_restore % of a full battery must be at least e_restore minutes
+#   with the servers running; at 80 % that needs 32.5 (about 41 today).
 # t_grid: a grid sensor is slower and less sure than the UPS itself.
 MIN_OPTION = {"e_restore": 20, "c_restore": 50, "t_grid": 120}
 MAX_OPTION = {"c_restore": 100}

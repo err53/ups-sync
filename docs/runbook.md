@@ -96,6 +96,12 @@ Do these once, in order, when you can watch the servers.
 - The card's charge has topped out at 93 to 94 % on this battery. Keep
   the restore-charge setting well under that, or the group is never
   restored; the problem sensor turns on after six hours of waiting.
+- The restore charge must still mean at least 26 minutes with the servers
+  running, which covers a boot, a shutdown and the card's shed margin if
+  the power fails again at once. Check it with both servers running:
+  "Runtime with servers on" x 100 / "UPS battery charge" is what a full
+  battery holds (about 41 today). At 80 % it must be 32.5 or more. Below
+  that, replace the battery or raise the restore charge.
 - **With grid entities configured:** five minutes after the grid goes, the
   servers shut down and their group is cut, whichever way the transfer
   switch is set. They stay off until the grid is back and has been stable

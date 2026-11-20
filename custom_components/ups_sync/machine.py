@@ -182,12 +182,14 @@ def enough_to_restore(obs: Obs, p: Params) -> bool:
     curve between those loads near 0.7. CURVE is right near the peak, which
     is where a wake is decided, so a wake still uses reserve_min.
 
-    Charge does not depend on the load. c_restore must leave the bound in
-    formal/RESULTS.md (enough for a boot, a shutdown and the shed margin,
-    17 min with the servers running) as the battery ages, and stay below
-    the highest charge the card reaches (93 to 94 % on this battery), or the
-    group is never restored. A card that does not report charge falls back
-    to reserve_min.
+    Charge does not depend on the load. c_restore % of a full battery must
+    stay at least e_restore minutes with the servers running, the margin the
+    runtime rule always had (a boot drawing up to twice the running load,
+    then a shutdown, then the shed margin): at 80 % the battery must hold
+    32.5, against about 41 today. c_restore must also stay below the highest
+    charge the card reaches (93 to 94 % on this battery), or the group is
+    never restored. A card that does not report charge falls back to
+    reserve_min.
     """
     if obs.charge_pct is not None:
         return obs.charge_pct >= p.c_restore

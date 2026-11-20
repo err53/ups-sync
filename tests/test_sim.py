@@ -27,6 +27,7 @@ import random
 import pytest
 
 from custom_components.ups_sync.machine import (
+    CUT,
     IDLE,
     Obs,
     Params,
@@ -72,10 +73,8 @@ class World:
         cmd_fail: float,
         sensor: bool = False,
         cap: float = E_MAX,
-        params: Params = None,
     ) -> None:
         self.r = random.Random(seed)
-        self.p = params or P
         self.cap = cap  # full-load minutes this battery holds when full
         self.humans, self.cmd_fail = humans, cmd_fail
         # Optional grid sensor. It moves at random between "up", "down" and
@@ -197,7 +196,6 @@ class World:
     def controller(self) -> None:
         o = self.obs()
         observe(self.st, o, self.t, self.t)
-        P = self.p
         for act in decide(self.st, o, self.t, self.t, P, False):
             failed = self.r.random() < self.cmd_fail
             if act.kind == "shutdown":
@@ -283,7 +281,7 @@ class World:
                 self.set_group(True, "ha")
 
         # Humans, within the documented assumptions.
-        if self.humans and not self.settling and self.input and self.e >= self.p.e_restore:
+        if self.humans and not self.settling and self.input and self.e >= P.e_restore:
             if r.random() < 1 / 400:
                 n = r.choice(NAMES)
                 if self.srv[n] == "RUN":
@@ -323,9 +321,8 @@ def run(
     hours: int = 16,
     sensor: bool = False,
     cap: float = E_MAX,
-    params: Params = None,
 ) -> World:
-    w = World(seed, humans, cmd_fail, sensor, cap, params)
+    w = World(seed, humans, cmd_fail, sensor, cap)
     while w.t < hours * 3600:
         w.step()
     # Settle: power and HA stay up, nobody interferes.
@@ -369,14 +366,46 @@ def test_no_hard_cut_with_a_grid_sensor_that_is_often_wrong(seed):
     assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
 
 
+# The smallest battery the default c_restore is safe for: 80 % of it is
+# e_restore, the margin the runtime rule always had. It covers a boot that
+# draws up to about twice the running load, then a shutdown, then the shed
+# margin (formal/RESULTS.md, docs/STATE_MACHINE.md section 8).
+MIN_CAP = P.e_restore * 100 / P.c_restore
+
+
+def test_a_second_outage_right_after_a_restore_at_the_threshold():
+    """Worst case, fixed: restored at exactly c_restore with no recharge
+    during the hold, the grid fails at once, both servers take the longest
+    boot unreachable to the end, then the longest shutdown, on the steepest
+    curve. Found in review: with a 24-minute battery the group was shed 75 s
+    before a shutdown finished."""
+    w = World(0, humans=False, cmd_fail=0.0, cap=MIN_CAP)
+    w.curve = 1.3
+    w.watts = dict.fromkeys(NAMES, RUN_MAX_W)
+    w.group, w.srv = False, dict.fromkeys(NAMES, "OFF")
+    w.e = MIN_CAP * P.c_restore / 100
+    w.t, w.st = P.t_hold, State(ctl=CUT, hold_since=0)
+    w.controller()
+    assert w.group and w.restores == [w.e]
+    w.input, w.settling = False, True  # an outage from now on, nobody else acts
+    w.timer = dict.fromkeys(NAMES, 360)
+    w.boot_tail = dict.fromkeys(NAMES, 0)
+
+    def longest_shutdown(n: str) -> None:
+        w.srv[n], w.timer[n], w.tail[n] = "SHUT", 480, 0
+
+    w.begin_shutdown = longest_shutdown
+    for _ in range(3600 // DT):
+        w.step()  # raises HardCut if the card sheds a server that is not off
+    assert w.srv == dict.fromkeys(NAMES, "OFF")
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_an_aged_battery_still_leaves_enough_at_a_restore(seed):
-    """The battery holds well under half a new one's energy. A restore at
-    c_restore of what is left must still cover a boot, a shutdown and the
-    shed margin (17 min with the servers running, formal/RESULTS.md)."""
-    w = run(seed, humans=True, cmd_fail=0.3, sensor=True, cap=24.0)
+    """The battery holds just MIN_CAP, under 60 % of a new one."""
+    w = run(seed, humans=True, cmd_fail=0.3, sensor=True, cap=MIN_CAP)
     assert w.group and w.st.ctl == IDLE
-    assert all(e >= 17 for e in w.restores), min(w.restores)
+    assert all(e >= P.e_restore for e in w.restores), min(w.restores)
     # Not checked: that every server runs in the end. A server left off
     # while the other runs is woken only at e_restore minutes with the
     # servers on, which a battery this small never reaches (seed 989).
