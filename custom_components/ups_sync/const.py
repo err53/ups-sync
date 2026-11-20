@@ -17,18 +17,15 @@ CONF_ADD_ANOTHER = "add_another"
 OPT_LOAD_IDLE_MAX = "load_idle_max"
 OPT_NOTIFY = "notify_services"
 OPT_GRID = "grid_entities"
-# Option name -> Params field. Seconds, except e_restore (minutes) and
-# c_restore (% battery charge).
+# Option name -> Params field. Seconds, except c_restore (% battery charge).
 OPT_TIMINGS = (
-    "t_ob", "t_grid", "t_grace", "t_dead", "t_wake", "t_hold", "t_wait",
-    "e_restore", "c_restore",
+    "t_ob", "t_grid", "t_grace", "t_dead", "t_wake", "t_hold", "t_wait", "c_restore",
 )
 # Lowest value the options form accepts. Default 10 s.
-# e_restore: formal/RESULTS.md needs shed + boot + shutdown = 17 min at least.
-# c_restore: c_restore % of a full battery must be at least e_restore minutes
-#   with the servers running; at 80 % that needs 32.5 (about 41 today).
+# c_restore: c_restore % of a full battery must be at least 26 minutes with
+#   the servers running (formal/RESULTS.md); at 80 % that needs 32.5.
 # t_grid: a grid sensor is slower and less sure than the UPS itself.
-MIN_OPTION = {"e_restore": 20, "c_restore": 50, "t_grid": 120}
+MIN_OPTION = {"c_restore": 50, "t_grid": 120}
 MAX_OPTION = {"c_restore": 100}
 
 # Shown as the device's "Visit" link: what Armed and Maintenance do.

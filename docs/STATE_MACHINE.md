@@ -68,11 +68,11 @@ the diagram:
 - **Cut guard**: group 2 on, no server answers, no iDRAC reports power on,
   and the UPS load at or below the configured idle-load limit.
 - **Grid down** starts a shutdown only outside maintenance, and only once
-  the idle-load limit is set and a peak load is known (section 8). The
-  on-battery and low-battery triggers have no such conditions.
-- **Recover** also needs a known peak load, and this process must have
-  watched the darkness itself for `T_GRACE`.
-- **Wake** also needs power back, reserve ≥ `E_RESTORE`, and the down
+  the idle-load limit is set (section 8). The on-battery and low-battery
+  triggers have no such conditions.
+- **Recover** also needs this process to have watched the darkness itself
+  for `T_GRACE`.
+- **Wake** also needs power back, charge ≥ `C_RESTORE`, and the down
   server's iDRAC reporting it off.
 - **Maintenance** blocks the grid-down trigger, recover, wake and restore.
 - **Cut and restore** are commands to the card. The state becomes CUT when
@@ -85,8 +85,7 @@ the diagram:
   sent.
 - Names are the model's. The defaults, all configurable: `T_OB` 2 min,
   `T_GS` 5 min, `T_GRACE` 2 min, `T_DEAD` and `T_WOL` 10 min, `T_HOLD`
-  6 min, `T_WAIT` 24 min, `E_RESTORE` 26 min of runtime at the peak load,
-  `C_RESTORE` 80 % battery charge (section 7).
+  6 min, `T_WAIT` 24 min, `C_RESTORE` 80 % battery charge (section 7).
 
 **Reconciliation rule.** The controller state is anchored to the observable
 group 2 state. Group 2 off while in IDLE or SHUTDOWN forces CUT. Group 2 on
@@ -110,7 +109,7 @@ own actions (load shed, auto-return) harmless.
   is a persisted "last time any server answered" timestamp, so it survives
   HA restarts.
 - **Wake (iDRAC power-on)** when some server is unreachable while another is
-  up, group 2 is powered, input is present, reserve ≥ `E_RESTORE`, and this
+  up, group 2 is powered, input is present, charge ≥ `C_RESTORE`, and this
   has held for `T_WOL`. This covers the leftover of an interrupted shutdown
   (HA crashed after powering off one server). Cycling the group would
   hard-cut the running server, so the down one is powered on individually
@@ -169,7 +168,7 @@ own actions (load shed, auto-return) harmless.
    "power failure longer than N seconds". After a shed the group is set to
    stay off; the controller restores it.
 3. **NMC min return runtime** on group 2, set to the card's maximum, keeps
-   servers off after a full UPS death until the reserve is back above
+   servers off after a full UPS death until its runtime is back above
    `E_RETURN`.
 4. **BIOS restore on AC** on both servers.
 
@@ -191,11 +190,12 @@ table, pass/fail per variant, and counterexample traces.
 ## 6. Assumptions the proof depends on
 
 - Shutdown completes within `SMAX` and boot within `BMAX` once started.
-- The UPS runtime estimate is roughly honest (we take 57 min at today's
-  load and use it as the full-charge budget).
+- The card's charge is a fair share of what the battery holds when full,
+  and a full battery holds at least 32.5 minutes with the servers running
+  (section 7, `C_RESTORE`).
 - Nobody presses power buttons or runs `poweroff` by hand while the UPS is on
-  battery, and nobody powers a server **on** while the UPS has less than
-  `E_RESTORE` of reserve (about 60 % charge). The model found that a human powering a
+  battery, and nobody powers a server **on** while the battery charge is
+  below `C_RESTORE`. The model found that a human powering a
   server on from a live outlet with ~11 min of runtime left, during a
   flapping grid, ends in a hard cut that no controller can prevent. Let HA
   bring the servers back; it waits for the runtime margin.
@@ -228,8 +228,7 @@ table, pass/fail per variant, and counterexample traces.
 | `T_DEAD` = 5 | 10 min dark (persisted) before cutting a group whose servers are all off |
 | `T_WOL` = 5 | 10 min with one server down and one up before iDRAC power-on of the down one |
 | `T_HOLD` = 3 | 6 min stable input before restore |
-| `E_RESTORE` = 26 | wake a server only with a reserve of ≥ 26 min *at the heaviest running load seen* (a little over half charge today); also the bound on humans powering servers on |
-| `C_RESTORE` = 80 | restore a cut group only at ≥ 80 % battery charge, `e ≥ 0.8 x EMAX`. A smaller `EMAX` models an aged battery. The model needs `C_RESTORE x EMAX / 100 ≥ E_SHED + DRAIN_HI x (BMAX + SMAX + T_OB)` = 19, but it draws no more during a boot than while running; with a boot drawing up to twice as much the simulator needs `E_RESTORE` = 26, so the battery must hold at least 32.5 full-load minutes at 80 % |
+| `C_RESTORE` = 80 | restore a cut group, wake a server, or (by assumption) let a human power one on only at ≥ 80 % battery charge, `e ≥ 0.8 x EMAX`. A smaller `EMAX` models an aged battery. The model is safe from about 16 min in the bank, but it draws no more during a boot than while running; with a boot drawing up to twice as much the simulator needs 26, so the battery must hold at least 32.5 full-load minutes at 80 % |
 | `E_LB` = 16 | UPS low-battery threshold 16 min (NMC "Low battery duration") |
 | `E_SHED` = 3 | NMC load shed group 2 when runtime < 3 min. Was 6; lowered so the card's own return threshold is enough (see RESULTS.md) |
 | `E_RETURN` = 17 | NMC min return runtime 60 min, the card's maximum. The card measures at the present load, so with the servers off this is only about 17 to 23 min with them running |
@@ -244,8 +243,7 @@ the model already allows.
 
 | Difference | Why it is safe |
 | --- | --- |
-| **Battery reserve is not the UPS's raw runtime figure.** The UPS reports runtime at its *present* load. With the servers off that is two to three times what it will be once they run, so comparing it with `E_RESTORE` would wake a server far too early. The model's `e` is minutes with every server running. The code scales the UPS's figure to the peak load: `reserve = runtime x (load now / peak) ^ 1.4`. The peak is the heaviest load seen *while every server was up*. Readings with a server off or booting do not count: standby draw would understate it and a boot surge would overstate it for good. A server answers on the network before its boot is over, so readings only count once every server has been reachable without a break for five minutes. A failed or missed UPS reading restarts those five minutes, because a server may have rebooted unseen. The exponent is deliberately above the 1.2 to 1.36 that APC's runtime tables give for this UPS, so the result never overstates. The peak only rises, needs two consecutive readings to rise, and is stored. Until one exists, wake and the power-cycle of dead outlets are refused, and so is a restore on a card that does not report its charge. `E_RESTORE` = 26 leaves room for a boot that draws up to about twice the running load. | This is what makes the code match the model's `e`. Found in review: the first version compared raw runtime, the second learned a ratio that followed recent load, the third counted boot surges. |
-| **A restore goes by battery charge, not by the scaled reserve.** With the group cut the UPS load is about 155 W, a third of the peak, and the scaling above halves the card's runtime from there: on 2026-11-20, at 94 % charge and never on battery, the reserve read 38 with the servers running and 20 to 22 with the group cut, under `E_RESTORE`, so a group cut by the grid trigger was never restored. The card's own figures that night put its curve between those loads near 0.7. Charge does not depend on the load. The restore needs `charge ≥ C_RESTORE`; the model's `ChargeOk` is `e x 100 ≥ C_RESTORE x EMAX`, with `EMAX` the energy of this battery when full, so an aged battery is a smaller `EMAX`. A card that does not report charge falls back to the reserve. Waking a server still uses the reserve, because the load is then near the peak, where the exponent holds. | Equivalent to the model's `DoRest`, with `C_RESTORE x EMAX / 100 ≥ E_RESTORE` so the restore keeps the margin the runtime rule had: at 80 % the battery must hold 32.5 full-load minutes, against about 41 today. Checked in `formal/RESULTS.md` (Revision 2026-11-20). As the battery ages below that, replace it or raise `C_RESTORE`. |
+| **Every restore and wake goes by battery charge.** The model's `e` is minutes with every server running; the card reports runtime at its *present* load, two to three times that with the servers off. Earlier versions scaled the card's runtime to the heaviest load seen while every server was up (`runtime x (load now / peak) ^ 1.4`). That holds near the peak but halves the figure from the light load of a cut group: on 2026-11-20, at 94 % charge and never on battery, it read 20 to 22 with the group cut, and the group was never restored. The peak was also raised for good by any extra load on the UPS while the servers ran (a heater during a calibration took it to 1132 W). Charge does not depend on the load. The code needs `charge ≥ C_RESTORE`; the model's `ChargeOk` is `e x 100 ≥ C_RESTORE x EMAX`. The card must report its charge: a reading without it is no reading. | Equivalent to the model's `DoRest` and `DoWol`, with `C_RESTORE x EMAX / 100 ≥ 26` so a restore keeps the margin the runtime rule had: at 80 % the battery must hold 32.5 full-load minutes. Checked in `formal/RESULTS.md` (Revisions of 2026-11-20). As the battery ages below that, replace it or raise `C_RESTORE`. |
 | Real seconds and 15 s polling instead of 2-minute ticks. A timer counts how long a condition has been *watched* without interruption. If two readings are more than 120 s apart (failed UPS reads, a stalled HA), every timer restarts. 120 s is also when the problem sensor reports the UPS as unreadable. | A refinement: "held for N ticks" becomes "held for N x 120 s", and unobserved time never counts. |
 | The stored "all servers silent since" time survives restarts, as in the model. It may be stale, so a power-cycle also needs this process to have watched the silence itself for `T_GRACE`. A stored time in the future is discarded. | Only removes cuts. |
 | The state becomes CUT when the card acknowledges the off command or the group is *observed* off, and returns to IDLE only when the group is observed on. | A failed SNMP write is retried on the next poll instead of being assumed. Ending the shutdown on the acknowledgement means that if the group comes back on while the UPS is unreadable, the servers are not shut down a second time on good power. Known residual: if the card carries out the off command but its acknowledgement is lost, and the UPS is then unreadable, and the group comes back on, that second shutdown can still happen. It is followed by the normal cut and restore and is never a hard cut. |
@@ -258,7 +256,7 @@ the model already allows.
 | The load guard refuses every cut until the idle load is configured. | Only removes cuts. |
 | The problem sensor also turns on when every server has been silent for `T_DEAD` but the guard refuses the power-cycle (for example the idle load setting is too low), when the group has been off with stable input for six hours without a restore, and when a cut or restore command fails. | Reporting only. Without it, servers could stay off with nothing to say so. |
 | The grid sensor is a list of entities with three outcomes (up, down, silent) rather than the model's two. Its timers restart after a gap in readings like every other timer. | Silent has a subset of the effects of the model's "down": it holds back restore and wake but starts nothing. The model's sensor may read down at any time, so every silent behaviour is covered. |
-| The grid-loss shutdown waits until the controller is calibrated: idle load set and peak load known. | Only removes a shutdown. Without the idle load no cut is allowed, and without the peak no wake or power-cycle is (nor a restore on a card that does not report charge), so a grid shutdown before either could leave the servers off. The on-battery triggers do not wait. |
+| The grid-loss shutdown waits until the idle load is set. | Only removes a shutdown. Without the idle load no cut is allowed, so a grid shutdown would leave the servers shut down on live outlets. The on-battery triggers do not wait. |
 | A grid entity that no integration is providing says nothing and raises the problem sensor: one Home Assistant does not know at all (renamed, deleted), or one it has only restored as a placeholder after a restart because the owning integration has not loaded. A silent sensor cannot start a shutdown and cannot allow a restore or a wake. The second half matters after a Home Assistant restart in the middle of an outage: the wall charger has no power, its integration cannot load, and the servers must not come back on the DPU. If the group has been off for six hours with UPS input present and no evidence of the grid in all that time, the problem sensor turns on. That six-hour timer is not stored and restarts with Home Assistant, after an unreadable stretch, and whenever the sensor reads up once; `waiting_for_grid` says why from the first minute regardless. Turning maintenance off restarts the grid timer. | Reporting, and removing shutdowns. A sensor that stops working must not keep the servers off unnoticed. |
 
 `tests/test_sim.py` is a Python port of the model's environment that drives

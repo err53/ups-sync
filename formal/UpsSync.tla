@@ -33,7 +33,6 @@ CONSTANTS
   T_DEAD,      \* controller: ticks servers unpingable without ack -> assume off
   T_WAIT,      \* controller: SHUTDOWN taking longer than this raises an alarm (notification only)
   T_HOLD,      \* controller: ticks input must be stable before restore
-  E_RESTORE,   \* controller: min energy before a wake (and, in UpsSync2, the human assumption)
   C_RESTORE,   \* controller: min battery charge, in % of EMAX, before restore
   E_SHED,      \* NMC load shed: group 2 off when on battery and e < E_SHED
   E_LB,        \* UPS low-battery threshold (NUT "LB")

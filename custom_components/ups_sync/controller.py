@@ -23,22 +23,17 @@ from .const import DOMAIN, STALE_SECONDS
 from .machine import (
     CUT,
     IDLE,
-    MAX_GAP,
     SHUTDOWN,
     Action,
     Obs,
     Params,
     ServerObs,
     State,
-    all_up_since,
     cut_guard,
     decide,
     enter_cut,
-    peak_sample,
     observe,
-    reserve_minutes,
     stuck,
-    update_peak,
 )
 from .servers import Server, ServerError
 from .snmp import ApcClient, UpsError, UpsReading
@@ -66,7 +61,6 @@ class Controller:
         self.grid_missing: list[str] = []
         self.state = State()
         self.obs: Obs | None = None
-        self.charge_pct: float | None = None  # gates a restore; None: not reported
         self._read_ok = False  # the latest poll got a UPS reading
         self.armed = False
         self.maintenance = False
@@ -74,10 +68,6 @@ class Controller:
         self.last_action = ""
         self.last_ok: float | None = None
         self.last_error = ""
-        self.peak: float | None = None  # heaviest load seen with every server up
-        self._prev_sample: float | None = None
-        self._up_since: float | None = None
-        self._prev_load: float | None = None
         self._wanted_group: bool | None = None
         self.group_cmd_failed = False
         self.stuck = False
@@ -98,7 +88,6 @@ class Controller:
         self.state.dead_since = data.get("dead_since")
         if self.state.dead_since is not None and self.state.dead_since > time.time():
             self.state.dead_since = None  # the clock stepped backwards
-        self.peak = data.get("peak") or None
         self._saved = self._snapshot()
 
     def _snapshot(self) -> dict:
@@ -106,7 +95,6 @@ class Controller:
             "armed": self.armed,
             "maintenance": self.maintenance,
             "dead_since": self.state.dead_since,
-            "peak": self.peak,
         }
 
     async def _save_if_changed(self) -> None:
@@ -160,7 +148,7 @@ class Controller:
 
     @property
     def calibrated(self) -> bool:
-        return self.params.load_idle_max is not None and self.peak is not None
+        return self.params.load_idle_max is not None
 
     async def async_stop(self) -> None:
         """Wait for a step in flight, then never act again (unload, reload)."""
@@ -180,7 +168,6 @@ class Controller:
             ),
             "grid_entities_missing": self.grid_missing,
             "group_command_failed": self.group_cmd_failed,
-            "peak_load_w": self.peak,
             "acked": sorted(self.state.acked),
             "would_act": self.would_act,
             "last_action": self.last_action,
@@ -191,11 +178,6 @@ class Controller:
         return attrs
 
     # ---- main loop -------------------------------------------------------
-
-    def _forget_settling(self) -> None:
-        """A reading was missed. A server may have rebooted unseen, so the
-        "every server up and settled" stretch starts again."""
-        self._up_since = self._prev_sample = self._prev_load = None
 
     def _grid(self) -> tuple[bool, bool]:
         """(grid_down, grid_ok) from the configured grid entities.
@@ -243,26 +225,13 @@ class Controller:
             *(s.chassis_on() for s in self.servers.values()),
         )
         n = len(self.servers)
-        self.charge_pct = ups.charge_pct
-        mono = time.monotonic()
-        if self.last_ok is not None and mono - self.last_ok > MAX_GAP:
-            self._forget_settling()  # a stalled loop counts as a missed reading
-        self._up_since = all_up_since(
-            self._up_since, ups.group_on, all(probes[:n]), mono
-        )
-        sample = peak_sample(ups.load_w, self._up_since, mono)
-        self.peak = update_peak(self.peak, self._prev_sample, sample)
-        self._prev_sample = sample
-        # The lower of the last two loads, in case the runtime figure lags.
-        load_for_reserve = min(self._prev_load or ups.load_w, ups.load_w)
         grid_down, grid_ok = self._grid()
-        self._prev_load = ups.load_w
         return Obs(
             input_present=ups.input_present,
             on_battery=ups.on_battery,
             low_battery=ups.low_battery,
             runtime_min=ups.runtime_min,
-            reserve_min=reserve_minutes(ups.runtime_min, load_for_reserve, self.peak),
+            charge_pct=ups.charge_pct,
             load_w=ups.load_w,
             group_on=ups.group_on,
             servers={
@@ -271,7 +240,6 @@ class Controller:
             },
             grid_down=grid_down,
             grid_ok=grid_ok,
-            charge_pct=ups.charge_pct,
         )
 
     async def async_step(self, _now=None) -> None:
@@ -288,7 +256,6 @@ class Controller:
                 self.last_error = f"UPS: {exc}"
                 self._read_ok = False
                 _LOGGER.warning("UPS read failed: %s", exc)
-                self._forget_settling()
                 self._notify_listeners()
                 return
             self.obs = obs

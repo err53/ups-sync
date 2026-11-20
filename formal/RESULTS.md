@@ -379,3 +379,40 @@ includes what the real card showed.
 | same, battery 24, humans, 30 % of commands failing, random grid sensor | no hard cut. Lowest at a restore 19.2. One run left a server off while the other ran: a wake needs `E_RESTORE` with the servers on, which a battery that small never reaches |
 | restore at 40 % with a 24-minute battery (mutation) | **23 hard cuts** |
 | restore by the scaled reserve, as before (mutation) | **servers left off** in 7 runs: the bug of 2026-11-20 |
+
+## Revision 2026-11-20 (2): no learned peak load
+
+The restore already went by battery charge. Waking a server still went by
+the card's runtime scaled to the heaviest load seen with every server up,
+and "calibrated" still meant that peak was known. A runtime calibration on
+the real UPS with an extra heater load then raised the peak to 1132 W for
+good, which made the scaled figure useless. The peak and the scaled
+runtime are gone. In `UpsSync2.tla` `DoWol` and the human power-on
+assumption (`OnCand`) now need `ChargeOk`, the same as `DoRest`, and the
+constant `E_RESTORE` is removed from both models and every configuration.
+Both changes only make actions rarer (`ChargeOk` at 80 % is `e >= 46`, the
+old bound was `e >= 26`). The single-server model only lost an unused
+constant, so its runs above stand.
+
+Checked for speed, not exhaustively:
+
+| Config | Checks | Result |
+| --- | --- | --- |
+| `MC2_NoHuman_safety.cfg` (two servers, `GS = "true"`) | `TypeOK`, `NoHardCut`, `NoSpurious`, `NoTimeout` | **No violation** in 1,797,602 distinct states (120.6 M generated) to depth 32, stopped after 45 min with 51,869 states left on the queue. The full run before this change had 2,085,760 |
+| `MC2_NoHuman_live.cfg` (two servers, `GS = "off"`) | `EventuallyRunning` | Stopped after 45 min at 1,390,652 distinct states, before the liveness check, which runs on the complete graph. Not checked |
+| `MC2_NoHuman_gs_sim.cfg` (two servers, `GS = "any"`) | `-simulate -depth 300`, 8 min | **No violation** in 20.8 M states checked |
+| `MC2_Human_sim.cfg` (two servers, humans) | `-simulate -depth 300`, 8 min | **No violation** in 21.6 M states checked |
+
+Liveness with the stricter wake is covered by the simulator instead:
+`tests/test_sim.py` drops the peak, lets humans power on only at the
+restore charge, and asserts that every server not turned off by a human
+runs in the end.
+
+| Variant (1000 runs of 16 simulated hours) | Result |
+| --- | --- |
+| battery 57 | pass. 2,884 restores, the lowest at 45.6 min in the bank |
+| battery 32.5 (80 % of it is 26), humans, 30 % of commands failing, random grid sensor | pass, every server running at the end. The previous version left one server off in one run, because a wake needed 26 min with the servers on, which that battery never reaches |
+| restore at 40 % with a 24-minute battery (mutation, 300 runs) | **9 hard cuts** |
+
+The new single SNMP read, with the charge in it, was also run once against
+the real card: all six values came back (94 % charge).

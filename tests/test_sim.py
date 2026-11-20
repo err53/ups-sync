@@ -33,14 +33,10 @@ from custom_components.ups_sync.machine import (
     Params,
     ServerObs,
     State,
-    all_up_since,
     cut_guard,
     decide,
     enter_cut,
     observe,
-    peak_sample,
-    reserve_minutes,
-    update_peak,
 )
 
 DT = 15
@@ -49,9 +45,8 @@ DT = 15
 # shed 3, min return 60 (the most the card accepts).
 E_MAX, E_LB, E_SHED, CARD_RETURN = 57.0, 16.0, 3.0, 60.0
 # A running server draws anywhere from RUN_MIN_W to RUN_MAX_W and wanders.
-# Booting draws far more than the controller ever counts towards its peak,
-# and a booting server already answers on the network for the last part of
-# its boot.
+# Booting draws far more, and a booting server already answers on the
+# network for the last part of its boot.
 BASE_W, STANDBY_W = 150, 10
 RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 280
 FULL_W = BASE_W + 2 * RUN_MAX_W
@@ -89,11 +84,7 @@ class World:
         # Load-to-runtime exponent. The real card's figures on 2026-11-20 put
         # it near 0.7 between 155 W and 436 W, far below the controller's 1.4.
         self.curve = self.r.uniform(0.6, 1.3)
-        self.peak: float | None = None
-        self.prev_sample: float | None = None
-        self.up_since: float | None = None
         self.boot_tail = dict.fromkeys(NAMES, 0)
-        self.prev_load: float | None = None
         self.watts = {n: self.r.uniform(RUN_MIN_W, RUN_MAX_W) for n in NAMES}
         self.blind_until = 0
         self.restores: list[float] = []  # true reserve at each restore
@@ -125,6 +116,10 @@ class World:
         """Energy used per minute on battery, in full-load minutes."""
         return (self.load() / FULL_W) ** self.curve
 
+    def charge(self) -> float:
+        """What the card reports: % of what this battery holds when full."""
+        return 100 * self.e / self.cap
+
     def card_runtime(self) -> float:
         """What the UPS reports: minutes left at the present load."""
         return self.e / self.drain()
@@ -142,25 +137,17 @@ class World:
             idrac = None if not powered or self.r.random() < 0.1 else state != "OFF"
             servers[n] = ServerObs(reach, idrac)
         load_w = self.load() + self.r.uniform(-NOISE_W, NOISE_W)
-        all_up = all(s.reachable for s in servers.values())
-        self.up_since = all_up_since(self.up_since, self.group, all_up, self.t)
-        sample = peak_sample(load_w, self.up_since, self.t)
-        self.peak = update_peak(self.peak, self.prev_sample, sample)
-        self.prev_sample = sample
-        reserve_load = min(self.prev_load or load_w, load_w)
-        self.prev_load = load_w
         return Obs(
             input_present=self.input,
             on_battery=not self.input,
             low_battery=not self.input and self.card_runtime() < E_LB,
             runtime_min=self.card_runtime(),
-            reserve_min=reserve_minutes(self.card_runtime(), reserve_load, self.peak),
+            charge_pct=self.charge(),
             load_w=load_w,
             group_on=self.group,
             servers=servers,
             grid_down=self.sensor and self.grid == "down",
             grid_ok=not self.sensor or self.grid == "up",
-            charge_pct=100 * self.e / self.cap,
         )
 
     # ---- server state changes --------------------------------------------
@@ -205,7 +192,7 @@ class World:
                     held = self.st.grid_since is not None and (
                         self.t - self.st.grid_since >= P.t_grid
                     )
-                    assert o.grid_down and held and o.reserve_min is not None, "spurious"
+                    assert o.grid_down and held, "spurious"
                 if not failed:
                     self.st.acked.add(act.server)
                     if self.srv[act.server] in ("RUN", "BOOT"):  # it answered
@@ -245,15 +232,13 @@ class World:
             if r.random() < 1 / 1500:
                 self.ha_down_until = self.t + r.randint(30, 900)
                 self.st = State(dead_since=self.st.dead_since)  # restart
-                self.up_since = self.prev_sample = self.prev_load = None
         if not (self.input or self.e > 0):
             self.ha_down_until = max(self.ha_down_until, self.t + 120)
 
         if not self.settling and r.random() < 1 / 800:
             self.blind_until = self.t + r.randint(15, 420)  # UPS unreadable
-        if self.t < self.blind_until:  # a missed reading, as in the controller
-            self.up_since = self.prev_sample = self.prev_load = None
-        elif self.t >= self.ha_down_until:
+        # No controller step while the UPS is unreadable or HA is down.
+        if self.t >= self.blind_until and self.t >= self.ha_down_until:
             self.controller()
 
         # Server NUT backstops, polling the card directly.
@@ -280,14 +265,15 @@ class World:
             if self.off_by == "dead" or (not self.settling and r.random() < 0.01):
                 self.set_group(True, "ha")
 
-        # Humans, within the documented assumptions.
-        if self.humans and not self.settling and self.input and self.e >= P.e_restore:
+        # Humans, within the documented assumptions: anything while there is
+        # input, but a power-on only at the restore charge.
+        if self.humans and not self.settling and self.input:
             if r.random() < 1 / 400:
                 n = r.choice(NAMES)
                 if self.srv[n] == "RUN":
                     self.begin_shutdown(n)
                     self.manual.add(n)
-                elif self.srv[n] == "OFF" and self.powered():
+                elif self.srv[n] == "OFF" and self.powered() and self.charge() >= P.c_restore:
                     self.begin_boot(n)
                     self.manual.discard(n)
 
@@ -366,11 +352,12 @@ def test_no_hard_cut_with_a_grid_sensor_that_is_often_wrong(seed):
     assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
 
 
-# The smallest battery the default c_restore is safe for: 80 % of it is
-# e_restore, the margin the runtime rule always had. It covers a boot that
-# draws up to about twice the running load, then a shutdown, then the shed
-# margin (formal/RESULTS.md, docs/STATE_MACHINE.md section 8).
-MIN_CAP = P.e_restore * 100 / P.c_restore
+# The smallest battery the default c_restore is safe for: 80 % of it is 26
+# minutes with the servers running. That covers a boot that draws up to
+# about twice the running load, then a shutdown, then the shed margin
+# (formal/RESULTS.md, docs/STATE_MACHINE.md section 8).
+MARGIN_MIN = 26.0
+MIN_CAP = MARGIN_MIN * 100 / P.c_restore
 
 
 def test_a_second_outage_right_after_a_restore_at_the_threshold():
@@ -404,8 +391,6 @@ def test_a_second_outage_right_after_a_restore_at_the_threshold():
 def test_an_aged_battery_still_leaves_enough_at_a_restore(seed):
     """The battery holds just MIN_CAP, under 60 % of a new one."""
     w = run(seed, humans=True, cmd_fail=0.3, sensor=True, cap=MIN_CAP)
+    assert all(s == "RUN" for n, s in w.srv.items() if n not in w.manual), w.srv
     assert w.group and w.st.ctl == IDLE
-    assert all(e >= P.e_restore for e in w.restores), min(w.restores)
-    # Not checked: that every server runs in the end. A server left off
-    # while the other runs is woken only at e_restore minutes with the
-    # servers on, which a battery this small never reaches (seed 989).
+    assert all(e >= MARGIN_MIN for e in w.restores), min(w.restores)

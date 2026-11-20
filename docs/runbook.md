@@ -17,20 +17,9 @@ Do these once, in order, when you can watch the servers.
    `false` before cutting over.
 3. **Install and configure** the integration (see the README). Leave it
    disarmed. The State sensor should read Idle, and each server's
-   "reachable" and "power" sensors should be on. After both have been up
-   for five minutes, the Peak load sensor is filled in. That is the
-   heaviest UPS load seen while both servers were up and settled. The
-   controller uses it to turn the UPS's runtime figure into "runtime with
-   the servers on". It only ever rises.
-   If the integration is added while a server is off, Peak load stays
-   unknown and the problem sensor stays on. Until both servers have been seen
-   running, nothing is power-cycled or woken and the grid entities cannot
-   start a shutdown. An outage on UPS battery still shuts the servers down
-   and cuts the group, and it is restored by battery charge as usual (on a
-   card that does not report charge, it stays off until you turn it on by
-   hand).
-   To reset it (for example after a one-off heavy load on the UPS), remove
-   the integration and add it again with both servers running.
+   "reachable" and "power" sensors should be on, and "UPS battery charge"
+   should show a figure. The card must report its charge: every restore
+   and wake goes by it, and a card that does not is reported as unreadable.
 4. **Calibrate the idle load.** Shut both servers down from their own UIs
    and leave them plugged in. Wait two minutes, read the UPS load sensor,
    add 40, and enter that as the idle load in the integration's options.
@@ -82,26 +71,26 @@ Do these once, in order, when you can watch the servers.
   runtime the UPS shows with the servers off is several times what it
   will be once they are running.
 - **After an outage the restore waits for the battery charge** to reach
-  80 %, so that the servers can get through another outage. After a long
-  outage that is a real recharge and can take a while.
-  It does not go by "Runtime with servers on" any more. That figure scales
-  the UPS's runtime to the servers' load with a fixed exponent of 1.4,
-  which fits near full load (about 1.44 measured on battery on
-  2026-11-17), but with the group cut it scales from about 155 W and
-  halves the result. On 2026-11-20 a grid-only shutdown, with the charge at
-  94 % and the UPS never on battery, left it at 20 to 22, under the old
-  threshold of 26, and the group was never restored. A wake (one server
-  off while the other runs) still uses it, because the load is then near
-  the peak.
+  80 %, so that the servers can get through another outage. From near
+  empty that took 42 minutes on 2026-11-20; a grid outage that the home
+  battery carried leaves the charge where it was, so the servers come
+  back 6 minutes after the grid.
+  No restore or wake goes by the UPS's runtime figure. It is measured at
+  the present load, two to three times too long with the servers off, and
+  an earlier version that scaled it to the servers' load left a group cut
+  on 2026-11-20 at 94 % charge for good. On battery the runtime still sets
+  the low-battery flag (below the card's low-battery duration), which
+  shuts the servers down at once.
 - The card's charge has topped out at 93 to 94 % on this battery. Keep
   the restore-charge setting well under that, or the group is never
   restored; the problem sensor turns on after six hours of waiting.
 - The restore charge must still mean at least 26 minutes with the servers
   running, which covers a boot, a shutdown and the card's shed margin if
-  the power fails again at once. Check it with both servers running:
-  "Runtime with servers on" x 100 / "UPS battery charge" is what a full
-  battery holds (about 41 today). At 80 % it must be 32.5 or more. Below
-  that, replace the battery or raise the restore charge.
+  the power fails again at once. Check it after a completed runtime
+  calibration, with both servers running and busy: "UPS runtime at present
+  load" x 100 / "UPS battery charge" is roughly what a full battery holds.
+  At 80 % it must be 32.5 or more (the old battery: about 41). Below that,
+  replace the battery or raise the restore charge.
 - **With grid entities configured:** five minutes after the grid goes, the
   servers shut down and their group is cut, whichever way the transfer
   switch is set. They stay off until the grid is back and has been stable
@@ -127,26 +116,32 @@ Do these once, in order, when you can watch the servers.
 
 ## The UPS battery
 
-As read from the card on 2026-11-17: battery last replaced 2022-07-15, the
-card's recommended replacement date 2027-01-15, replace-battery warning not
-raised, last self-test (2026-11-07) passed, last runtime calibration
-(2025-04-20) **invalid**, so the card's runtime figures are not matched to
-this battery. An aged battery holds less and sags more under load, which
-fits the 48 to 29 minute drop above.
+Replaced on 2026-11-20 (the previous one dated from 2022-07-15). Set the
+replacement date on the card. Its runtime calibration is **invalid** until
+one completes, so the card's runtime figures are not matched to this
+battery yet. Its charge reading also levelled off at 94 % after a few hours
+on mains, as the old battery's did.
 
-- Replace the battery by the card's date. Restores after an outage will
-  then come sooner, and every runtime figure will be closer to the truth.
-- Afterwards, set the replacement date on the card and let the battery
-  reach 100 %.
-- A runtime calibration would make the card's figures match the new
-  battery, but plan it as a separate job. It runs the UPS on battery, which
+- A runtime calibration makes the card's figures match the battery. Plan it
+  as a separate job. It runs the UPS on battery, which
   looks like an outage to everything: the armed controller shuts the
   servers down after 2 minutes (Maintenance does not stop that), TrueNAS
   shuts flandre down after 10, and the card's load shed still applies. The
   load then drops and the calibration may abort. Disarm the integration,
-  shut the servers down by hand with Maintenance on, check APC's minimum
-  load for a calibration, and re-arm afterwards. It also leaves the battery
-  nearly empty, so pick a time when an outage would not matter.
+  shut the servers down by hand with Maintenance on, and re-arm afterwards.
+  It also leaves the battery nearly empty, so pick a time when an outage
+  would not matter.
+- The load must be steady (APC suggests about 30 %, within 5 %; its
+  minimum is 10 %). The servers swing too much: about 375 to 460 W, and up
+  to 30 % within minutes. On 2026-11-20 a calibration with them running and
+  a heater added aborted after two minutes. Use the network and Home
+  Assistant alone (about 155 W) plus a steady resistive load, such as an
+  oil-filled heater on its lowest setting with its thermostat turned up,
+  in a group 2 outlet, starting from a full charge.
+- With the servers off and Maintenance on, the extra load changes nothing
+  the integration would do. The heavier load does shorten the runtime, so
+  the card reports low battery sooner during the calibration; with the
+  servers already off that only means nothing more to shut down.
 
 ## Maintenance
 
