@@ -58,7 +58,10 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
         ctl = entry.runtime_data
         found_on = ctl.obs.group_on
         print(f"\nfound group {GROUP} {'on' if found_on else 'off'}, load {ctl.obs.load_w} W, "
-              f"runtime {ctl.obs.runtime_min:.0f} min")
+              f"runtime {ctl.obs.runtime_min:.0f} min, charge {ctl.obs.charge_pct:.0f} %")
+        if ctl.obs.charge_pct < ctl.params.c_restore:
+            await hass.config_entries.async_unload(entry.entry_id)
+            pytest.skip(f"charge {ctl.obs.charge_pct:.0f} % is under the restore charge")
 
         await ctl.async_step()
         assert ctl.last_action == "", "dry run must not act"
