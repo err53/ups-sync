@@ -68,7 +68,7 @@ async def test_a_card_that_cannot_give_its_charge_is_unreadable():
 
         return get_cmd
 
-    for binds in (five + [(None, NoSuchObject())], five):
+    for binds in ([*five, (None, NoSuchObject())], five):
         with (
             patch.object(snmp, "get_cmd", card(binds)),
             patch.object(snmp.ApcClient, "_target", _target),
@@ -151,9 +151,9 @@ async def test_snmp_errors_become_ups_errors():
         with (
             patch.object(snmp, "get_cmd", fake),
             patch.object(snmp.ApcClient, "_target", _target),
+            pytest.raises(snmp.UpsError),
         ):
-            with pytest.raises(snmp.UpsError):
-                await snmp.ApcClient(None, "h", "public", "private", 2).read()
+            await snmp.ApcClient(None, "h", "public", "private", 2).read()
 
 
 class _Resp:

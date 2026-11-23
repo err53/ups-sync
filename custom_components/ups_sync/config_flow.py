@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+# Home Assistant 2026.10 validates with probatio, and `voluptuous` is now its
+# import shim. The code runs as written, but pyright sees two different Schema
+# classes, hence the ignores where a schema is passed to Home Assistant.
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_NAME
@@ -28,11 +31,11 @@ from .const import (
     CONF_SERVERS,
     CONF_WRITE_COMMUNITY,
     DOMAIN,
-    OPT_LOAD_IDLE_MAX,
-    OPT_NOTIFY,
     MAX_OPTION,
     MIN_OPTION,
     OPT_GRID,
+    OPT_LOAD_IDLE_MAX,
+    OPT_NOTIFY,
     OPT_TIMINGS,
 )
 from .machine import Params
@@ -117,7 +120,9 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._data = {**user_input, CONF_SERVERS: []}
                 return await self.async_step_server()
         return self.async_show_form(
-            step_id="user", data_schema=UPS_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=UPS_SCHEMA,  # pyright: ignore[reportArgumentType]
+            errors=errors,
         )
 
     async def async_step_server(self, user_input=None):
@@ -149,7 +154,7 @@ class UpsSyncConfigFlow(ConfigFlow, domain=DOMAIN):
         added = [s[CONF_NAME] for s in self._data[CONF_SERVERS]]
         return self.async_show_form(
             step_id="server",
-            data_schema=SERVER_SCHEMA,
+            data_schema=SERVER_SCHEMA,  # pyright: ignore[reportArgumentType]
             errors=errors,
             description_placeholders={
                 "host": self._data[CONF_HOST],
@@ -174,7 +179,7 @@ class UpsSyncOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         defaults = Params()
-        schema = {
+        schema: dict[vol.Marker, object] = {
             vol.Optional(OPT_LOAD_IDLE_MAX): vol.All(
                 vol.Coerce(float), vol.Range(min=0)
             ),
@@ -192,6 +197,7 @@ class UpsSyncOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(schema), self.config_entry.options
+                vol.Schema(schema),  # pyright: ignore[reportArgumentType]
+                self.config_entry.options,
             ),
         )

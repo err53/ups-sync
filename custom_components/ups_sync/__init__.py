@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_NAME, Platform
@@ -31,7 +33,7 @@ PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 type UpsSyncEntry = ConfigEntry[Controller]
 
 
-def params_from_options(options: dict) -> Params:
+def params_from_options(options: Mapping[str, Any]) -> Params:
     kwargs = {k: float(options[k]) for k in OPT_TIMINGS if k in options}
     return Params(load_idle_max=options.get(OPT_LOAD_IDLE_MAX), **kwargs)
 

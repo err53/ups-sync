@@ -436,7 +436,7 @@ def test_a_silent_grid_sensor_neither_shuts_down_nor_restores():
     assert kinds(step(st, obs(**off), 6 * 3600 + 405)) == [("restore", None)]
 
     st = State()
-    assert [a for a in step(st, obs(f=OFF, s=UP, load=300, grid=None), 0)] == []
+    assert step(st, obs(f=OFF, s=UP, load=300, grid=None), 0) == []
     assert step(st, obs(f=OFF, s=UP, load=300, grid=None), 900) == []  # no wake
 
 

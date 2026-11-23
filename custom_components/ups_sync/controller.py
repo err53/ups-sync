@@ -36,7 +36,7 @@ from .machine import (
     stuck,
 )
 from .servers import Server, ServerError
-from .snmp import ApcClient, UpsError, UpsReading
+from .snmp import ApcClient, UpsError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ class Controller:
         self.grid_missing = [
             e for e, ok in zip(self.grid_entities, live, strict=True) if not ok
         ]
-        known = [s for s, ok in zip(states, live, strict=True) if ok]
+        known = [s for s, ok in zip(states, live, strict=True) if ok and s is not None]
         up = any(self._shows_grid(s.state) for s in known)
         return bool(known) and not up, up
 
@@ -218,13 +218,11 @@ class Controller:
             return True
 
     async def _gather(self) -> Obs:
-        ups: UpsReading
-        ups, *probes = await asyncio.gather(
+        ups, reachable, chassis_on = await asyncio.gather(
             self.ups.read(),
-            *(s.reachable() for s in self.servers.values()),
-            *(s.chassis_on() for s in self.servers.values()),
+            asyncio.gather(*(s.reachable() for s in self.servers.values())),
+            asyncio.gather(*(s.chassis_on() for s in self.servers.values())),
         )
-        n = len(self.servers)
         grid_down, grid_ok = self._grid()
         return Obs(
             input_present=ups.input_present,
@@ -235,8 +233,8 @@ class Controller:
             load_w=ups.load_w,
             group_on=ups.group_on,
             servers={
-                name: ServerObs(probes[i], probes[n + i])
-                for i, name in enumerate(self.servers)
+                name: ServerObs(r, on)
+                for name, r, on in zip(self.servers, reachable, chassis_on, strict=True)
             },
             grid_down=grid_down,
             grid_ok=grid_ok,
@@ -297,13 +295,15 @@ class Controller:
 
     async def _execute(self, act: Action) -> None:
         text = self._describe(act)
+        # decide() names a server on every shutdown and wake.
+        server = act.server or ""
         try:
             if act.kind == "shutdown":
-                channel = await self.servers[act.server].shutdown()
-                self.state.acked.add(act.server)
+                channel = await self.servers[server].shutdown()
+                self.state.acked.add(server)
                 text += f" (accepted via {channel})"
             elif act.kind == "wake":
-                await self.servers[act.server].power_on()
+                await self.servers[server].power_on()
             elif act.kind == "cut":
                 # Look again immediately before cutting.
                 try:
@@ -329,9 +329,9 @@ class Controller:
                 self.group_cmd_failed = True
             # A failed shutdown command repeats every t_resend; say it once.
             if act.kind == "shutdown":
-                if act.server in self._failed:
+                if server in self._failed:
                     return
-                self._failed.add(act.server)
+                self._failed.add(server)
             await self._notify(self.last_error)
             return
         self.last_action = text

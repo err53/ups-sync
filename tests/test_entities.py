@@ -1,6 +1,6 @@
 """The readings are entities of their own, not only attributes of the state sensor."""
 
-from tests.test_integration import rig, setup  # noqa: F401  (rig is a fixture)
+from tests.test_integration import setup
 
 
 def state(hass, entity_id):

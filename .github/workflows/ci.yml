@@ -15,6 +15,17 @@ jobs:
       - run: uv venv && uv pip install -r requirements-test.txt
       - run: .venv/bin/python -m pytest -q
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      # pyright needs Home Assistant installed to check against its types.
+      - run: uv venv && uv pip install -r requirements-test.txt -r requirements-lint.txt
+      - run: scripts/check.sh
+
   hassfest:
     runs-on: ubuntu-latest
     steps:
