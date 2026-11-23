@@ -1,0 +1,7 @@
+# Tool configuration only. The integration itself is described by
+# custom_components/ups_sync/manifest.json; this is not a package.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+extend-exclude = ["formal/states"]

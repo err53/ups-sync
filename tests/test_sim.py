@@ -108,9 +108,7 @@ class World:
         if not self.powered():
             return BASE_W
         draw = {"OFF": STANDBY_W, "SHUT": SHUT_W, "BOOT": BOOT_W}
-        return BASE_W + sum(
-            draw.get(s, self.watts[n]) for n, s in self.srv.items()
-        )
+        return BASE_W + sum(draw.get(s, self.watts[n]) for n, s in self.srv.items())
 
     def drain(self) -> float:
         """Energy used per minute on battery, in full-load minutes."""
@@ -225,7 +223,9 @@ class World:
                 )
                 self.power_edge(was)
             if self.sensor and self.t >= self.grid_until:
-                self.grid = r.choice([g for g in ("up", "down", "silent") if g != self.grid])
+                self.grid = r.choice(
+                    [g for g in ("up", "down", "silent") if g != self.grid]
+                )
                 self.grid_until = self.t + (
                     r.randint(60, 14400) if self.grid == "up" else r.randint(60, 10800)
                 )
@@ -273,7 +273,11 @@ class World:
                 if self.srv[n] == "RUN":
                     self.begin_shutdown(n)
                     self.manual.add(n)
-                elif self.srv[n] == "OFF" and self.powered() and self.charge() >= P.c_restore:
+                elif (
+                    self.srv[n] == "OFF"
+                    and self.powered()
+                    and self.charge() >= P.c_restore
+                ):
                     self.begin_boot(n)
                     self.manual.discard(n)
 

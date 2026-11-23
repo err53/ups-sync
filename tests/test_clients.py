@@ -34,7 +34,10 @@ async def test_read_asks_for_the_right_oids_in_order():
         seen.append(([_oid_and_value(o)[0] for o in objects], target))
         return None, None, 0, [(None, _Val(v)) for v in (2, 342000, 412, 96000, 1, 94)]
 
-    with patch.object(snmp, "get_cmd", get_cmd), patch.object(snmp.ApcClient, "_target", _target):
+    with (
+        patch.object(snmp, "get_cmd", get_cmd),
+        patch.object(snmp.ApcClient, "_target", _target),
+    ):
         r = await snmp.ApcClient(None, "h", "public", "private", 2).read()
     assert seen == [
         (
@@ -66,9 +69,11 @@ async def test_a_card_that_cannot_give_its_charge_is_unreadable():
         return get_cmd
 
     for binds in (five + [(None, NoSuchObject())], five):
-        with patch.object(snmp, "get_cmd", card(binds)), patch.object(
-            snmp.ApcClient, "_target", _target
-        ), pytest.raises(snmp.UpsError):
+        with (
+            patch.object(snmp, "get_cmd", card(binds)),
+            patch.object(snmp.ApcClient, "_target", _target),
+            pytest.raises(snmp.UpsError),
+        ):
             await snmp.ApcClient(None, "h", "public", "private", 2).read()
 
 
@@ -80,11 +85,18 @@ async def test_set_group_writes_immediate_on_or_off_to_that_group_only(on, value
         seen.append((community.communityName, *_oid_and_value(objects[0])))
         return None, None, 0, [(None, _Val(value))]
 
-    with patch.object(snmp, "set_cmd", set_cmd), patch.object(snmp.ApcClient, "_target", _target):
+    with (
+        patch.object(snmp, "set_cmd", set_cmd),
+        patch.object(snmp.ApcClient, "_target", _target),
+    ):
         await snmp.ApcClient(None, "h", "public", "private", 3).set_group(on)
     assert len(seen) == 1
     community, oid, written = seen[0]
-    assert community == "private" and oid == f"{APC}.12.3.2.1.3.3" and int(written) == value
+    assert (
+        community == "private"
+        and oid == f"{APC}.12.3.2.1.3.3"
+        and int(written) == value
+    )
 
 
 async def test_group_name_is_read_from_the_card_and_never_fails():
@@ -117,7 +129,13 @@ async def test_group_name_is_read_from_the_card_and_never_fails():
         # A real name that merely looks like an SNMP error is kept.
         with patch.object(snmp, "get_cmd", answer(OctetString("No such server"))):
             assert await client.group_name() == "No such server"
-        for fake in (broken, timeout, empty, answer(NoSuchInstance()), answer(object())):
+        for fake in (
+            broken,
+            timeout,
+            empty,
+            answer(NoSuchInstance()),
+            answer(object()),
+        ):
             with patch.object(snmp, "get_cmd", fake):
                 assert await client.group_name() == ""
 
@@ -130,7 +148,10 @@ async def test_snmp_errors_become_ups_errors():
         return None, None, 0, [(None, "No Such Instance")] * 5
 
     for fake in (timeout, no_such):
-        with patch.object(snmp, "get_cmd", fake), patch.object(snmp.ApcClient, "_target", _target):
+        with (
+            patch.object(snmp, "get_cmd", fake),
+            patch.object(snmp.ApcClient, "_target", _target),
+        ):
             with pytest.raises(snmp.UpsError):
                 await snmp.ApcClient(None, "h", "public", "private", 2).read()
 
@@ -172,7 +193,13 @@ CFG = ServerConfig("s", "host", 8006, "idrac", "u", "p", "pve1", "u@pve!t=x")
 
 @pytest.mark.parametrize(
     ("state", "want"),
-    [("On", True), ("Off", False), ("PoweringOn", True), ("PoweringOff", True), (None, None)],
+    [
+        ("On", True),
+        ("Off", False),
+        ("PoweringOn", True),
+        ("PoweringOff", True),
+        (None, None),
+    ],
 )
 async def test_chassis_state_mapping(state, want):
     """Anything but a clear Off counts as on, so it can never permit a cut."""
@@ -182,14 +209,21 @@ async def test_chassis_state_mapping(state, want):
 
 async def test_chassis_unknown_when_idrac_fails_or_absent():
     assert await Server(CFG, _Session({("GET", SYS): (401, None)})).chassis_on() is None
-    assert await Server(ServerConfig("s", "host", 22), _Session({})).chassis_on() is None
+    assert (
+        await Server(ServerConfig("s", "host", 22), _Session({})).chassis_on() is None
+    )
 
 
 async def test_shutdown_prefers_proxmox_then_falls_back_to_idrac():
     session = _Session({("POST", PVE): (200, None), ("POST", RESET): (204, None)})
     assert await Server(CFG, session).shutdown() == "proxmox"
     assert session.sent == [
-        ("POST", PVE, {"command": "shutdown"}, {"Authorization": "PVEAPIToken=u@pve!t=x"})
+        (
+            "POST",
+            PVE,
+            {"command": "shutdown"},
+            {"Authorization": "PVEAPIToken=u@pve!t=x"},
+        )
     ]
 
     session = _Session({("POST", PVE): (500, None), ("POST", RESET): (204, None)})
@@ -209,7 +243,12 @@ async def test_power_on_uses_reset_on():
 
 @pytest.mark.parametrize(
     ("error", "want"),
-    [(None, True), (ConnectionRefusedError(), True), (TimeoutError(), False), (OSError(65, "no route"), False)],
+    [
+        (None, True),
+        (ConnectionRefusedError(), True),
+        (TimeoutError(), False),
+        (OSError(65, "no route"), False),
+    ],
 )
 async def test_reach_probe(error, want):
     """A refused connection comes from a live kernel; only silence is "down"."""
@@ -223,5 +262,7 @@ async def test_reach_probe(error, want):
             raise error
         return None, Writer()
 
-    with patch("custom_components.ups_sync.servers.asyncio.open_connection", open_connection):
+    with patch(
+        "custom_components.ups_sync.servers.asyncio.open_connection", open_connection
+    ):
         assert await Server(CFG, None).reachable() is want

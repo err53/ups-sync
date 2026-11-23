@@ -40,7 +40,6 @@ from .servers import Server, ServerConfig
 from .snmp import ApcClient, UpsError, make_engine
 
 
-
 class _WholeNumber(NumberSelector):
     """A typed number box that only accepts whole numbers and returns an int.
 
@@ -51,9 +50,7 @@ class _WholeNumber(NumberSelector):
 
     def __init__(self, low: int, high: int) -> None:
         super().__init__(
-            NumberSelectorConfig(
-                min=low, max=high, step=1, mode=NumberSelectorMode.BOX
-            )
+            NumberSelectorConfig(min=low, max=high, step=1, mode=NumberSelectorMode.BOX)
         )
 
     def __call__(self, data) -> int:

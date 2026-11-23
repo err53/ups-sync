@@ -29,7 +29,9 @@ def _grid(ctl: Controller) -> bool | None:
 
 
 # key, value, device class
-FACTS: tuple[tuple[str, Callable[[Controller], bool | None], BinarySensorDeviceClass | None], ...] = (
+FACTS: tuple[
+    tuple[str, Callable[[Controller], bool | None], BinarySensorDeviceClass | None], ...
+] = (
     ("input", _obs("input_present"), POWER),
     ("on_battery", _obs("on_battery"), None),
     ("low_battery", _obs("low_battery"), BinarySensorDeviceClass.BATTERY),

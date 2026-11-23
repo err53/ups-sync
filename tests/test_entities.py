@@ -126,7 +126,11 @@ def test_the_descriptions_use_this_installs_timings():
 
     ctl = SimpleNamespace(
         params=Params(
-            t_ob=180, t_grid=600, c_restore=85, t_wake=60, t_dead=1800,
+            t_ob=180,
+            t_grid=600,
+            c_restore=85,
+            t_wake=60,
+            t_dead=1800,
             t_grace=1200,
         ),
         grid_entities=[],
@@ -185,5 +189,10 @@ async def test_sensors_of_earlier_versions_are_removed(hass, rig):
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     for key in ("reserve", "peak_load"):
-        assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}") is None
-    assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_charge")
+        assert (
+            registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
+            is None
+        )
+    assert registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_battery_charge"
+    )
