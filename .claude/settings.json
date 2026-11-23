@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command // \"\"' | grep -Eq -- '\\bgit\\b[^;&|#]*\\b(commit|push|merge|pull|rebase|am|cherry-pick|revert)\\b[^;&|#]*--no-verify' && { echo 'Blocked: fix what the pre-commit hook reports instead of skipping it (scripts/check.sh --fix).' >&2; exit 2; } || exit 0"
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_verify_guard.py\""
           }
         ]
       }

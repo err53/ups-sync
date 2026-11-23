@@ -295,14 +295,15 @@ class Controller:
 
     async def _execute(self, act: Action) -> None:
         text = self._describe(act)
-        # decide() names a server on every shutdown and wake.
-        server = act.server or ""
+        server = act.server  # decide() names one on every shutdown and wake
         try:
             if act.kind == "shutdown":
+                assert server is not None
                 channel = await self.servers[server].shutdown()
                 self.state.acked.add(server)
                 text += f" (accepted via {channel})"
             elif act.kind == "wake":
+                assert server is not None
                 await self.servers[server].power_on()
             elif act.kind == "cut":
                 # Look again immediately before cutting.
@@ -328,7 +329,7 @@ class Controller:
             if act.kind in ("cut", "restore"):
                 self.group_cmd_failed = True
             # A failed shutdown command repeats every t_resend; say it once.
-            if act.kind == "shutdown":
+            if act.kind == "shutdown" and server is not None:
                 if server in self._failed:
                     return
                 self._failed.add(server)

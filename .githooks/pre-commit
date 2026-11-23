@@ -1,3 +1,12 @@
 #!/bin/sh
 # Enabled with: git config core.hooksPath .githooks
+#
+# The checks read the working tree, so refuse while a checked file differs
+# from what is staged: otherwise an unstaged fix could hide a staged error.
+if ! git diff --quiet -- '*.py' pyproject.toml; then
+    echo "pre-commit: stage or set aside unstaged Python changes first, so the" >&2
+    echo "checks see exactly what is being committed:" >&2
+    git diff --name-only -- '*.py' pyproject.toml >&2
+    exit 1
+fi
 exec scripts/check.sh
