@@ -34,9 +34,30 @@ def _obs(field: str) -> Callable[[Controller], Any]:
 # key, value, needs a fresh UPS reading, device class, unit, diagnostic
 SENSORS: tuple[tuple[str, Callable[[Controller], Any], bool, Any, Any, bool], ...] = (
     ("load", _obs("load_w"), True, SensorDeviceClass.POWER, UnitOfPower.WATT, False),
-    ("runtime", _obs("runtime_min"), True, SensorDeviceClass.DURATION, UnitOfTime.MINUTES, False),
-    ("battery_charge", _obs("charge_pct"), True, SensorDeviceClass.BATTERY, PERCENTAGE, False),
-    ("would_act", lambda ctl: _text("; ".join(ctl.would_act)), False, None, None, False),
+    (
+        "runtime",
+        _obs("runtime_min"),
+        True,
+        SensorDeviceClass.DURATION,
+        UnitOfTime.MINUTES,
+        False,
+    ),
+    (
+        "battery_charge",
+        _obs("charge_pct"),
+        True,
+        SensorDeviceClass.BATTERY,
+        PERCENTAGE,
+        False,
+    ),
+    (
+        "would_act",
+        lambda ctl: _text("; ".join(ctl.would_act)),
+        False,
+        None,
+        None,
+        False,
+    ),
     ("last_action", lambda ctl: _text(ctl.last_action), False, None, None, True),
     ("last_error", lambda ctl: _text(ctl.last_error), False, None, None, True),
 )
@@ -77,7 +98,9 @@ class StateSensor(UpsSyncEntity, SensorEntity):
 
 
 class ReadingSensor(UpsSyncEntity, SensorEntity):
-    def __init__(self, ctl, entry_id, key, value, needs_ups, device_class, unit, diagnostic):
+    def __init__(
+        self, ctl, entry_id, key, value, needs_ups, device_class, unit, diagnostic
+    ):
         super().__init__(ctl, entry_id, key)
         self._value = value
         self._needs_ups = needs_ups

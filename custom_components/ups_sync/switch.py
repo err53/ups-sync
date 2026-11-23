@@ -29,7 +29,7 @@ def describe(ctl: Controller, key: str) -> str:
     restore = (
         f"after {_min(p.t_hold)} of UPS input"
         + (" with a grid entity showing the grid up" if grid else "")
-        + f", once \"UPS battery charge\" is at least {p.c_restore:g} %"
+        + f', once "UPS battery charge" is at least {p.c_restore:g} %'
     )
     if key == "armed":
         return (
@@ -49,12 +49,12 @@ def describe(ctl: Controller, key: str) -> str:
             "switched off by hand. Powers on a server that has been off "
             f"{_min(p.t_wake)} while another runs, if the UPS has input"
             + (" and a grid entity shows the grid up" if grid else "")
-            + f" and \"UPS battery charge\" is at least {p.c_restore:g} %. "
+            + f' and "UPS battery charge" is at least {p.c_restore:g} %. '
             f"If every server has been off {_min(cycle)} on live outlets, "
             "cuts the group (once the idle load is set) so they boot when it is "
             "restored: turn on "
             "Maintenance before shutting them down by hand. "
-            "Off: sends no commands, only watches; \"Dry run would do\" "
+            'Off: sends no commands, only watches; "Dry run would do" '
             "shows what it would do. Turning it off does not recall a "
             "shutdown a server has already accepted."
         )
@@ -92,7 +92,10 @@ def describe(ctl: Controller, key: str) -> str:
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     ctl = entry.runtime_data
     async_add_entities(
-        [FlagSwitch(ctl, entry.entry_id, "armed"), FlagSwitch(ctl, entry.entry_id, "maintenance")]
+        [
+            FlagSwitch(ctl, entry.entry_id, "armed"),
+            FlagSwitch(ctl, entry.entry_id, "maintenance"),
+        ]
     )
 
 

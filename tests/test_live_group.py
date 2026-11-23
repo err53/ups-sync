@@ -45,8 +45,16 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
             "read_community": os.environ.get("UPS_SYNC_LIVE_READ", "public"),
             "write_community": os.environ.get("UPS_SYNC_LIVE_WRITE", "private"),
             "group": GROUP,
-            "servers": [{"name": "pretend", "host": "127.0.0.1", "reach_port": 9,
-                         "idrac_host": "127.0.0.1", "idrac_user": "x", "idrac_password": "x"}],
+            "servers": [
+                {
+                    "name": "pretend",
+                    "host": "127.0.0.1",
+                    "reach_port": 9,
+                    "idrac_host": "127.0.0.1",
+                    "idrac_user": "x",
+                    "idrac_password": "x",
+                }
+            ],
         },
         # The group is empty, so the whole UPS load counts as "idle" here.
         options={"load_idle_max": 100000, "t_hold": 4, "t_dead": 4, "t_grace": 2},
@@ -57,19 +65,25 @@ async def test_restore_then_cut_on_real_group(hass, socket_enabled):
         assert await hass.config_entries.async_setup(entry.entry_id)
         ctl = entry.runtime_data
         found_on = ctl.obs.group_on
-        print(f"\nfound group {GROUP} {'on' if found_on else 'off'}, load {ctl.obs.load_w} W, "
-              f"runtime {ctl.obs.runtime_min:.0f} min, charge {ctl.obs.charge_pct:.0f} %")
+        print(
+            f"\nfound group {GROUP} {'on' if found_on else 'off'}, load {ctl.obs.load_w} W, "
+            f"runtime {ctl.obs.runtime_min:.0f} min, charge {ctl.obs.charge_pct:.0f} %"
+        )
         if ctl.obs.charge_pct < ctl.params.c_restore:
             await hass.config_entries.async_unload(entry.entry_id)
-            pytest.skip(f"charge {ctl.obs.charge_pct:.0f} % is under the restore charge")
+            pytest.skip(
+                f"charge {ctl.obs.charge_pct:.0f} % is under the restore charge"
+            )
 
         await ctl.async_step()
         assert ctl.last_action == "", "dry run must not act"
         await ctl.async_set_flag("armed", True)
         try:
-            for want in ([True, False] if not found_on else [False, True, False]):
+            for want in [True, False] if not found_on else [False, True, False]:
                 await wait_for(ctl, want)
-                print(f"group {GROUP} is now {'on' if want else 'off'}, controller {ctl.state.ctl}")
+                print(
+                    f"group {GROUP} is now {'on' if want else 'off'}, controller {ctl.state.ctl}"
+                )
         finally:
             await ctl.async_set_flag("armed", False)
             # A restore may have been issued in the same step that saw the cut.

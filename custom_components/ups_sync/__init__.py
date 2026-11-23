@@ -51,7 +51,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
         Server(
             ServerConfig(
                 name=s[CONF_NAME],
-                **{k: v for k, v in s.items() if k != CONF_NAME and v not in ("", None)},
+                **{
+                    k: v for k, v in s.items() if k != CONF_NAME and v not in ("", None)
+                },
             ),
             session,
         )
@@ -79,9 +81,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UpsSyncEntry) -> bool:
     entry.async_on_unload(_stop)
     await ctl.async_step()
     entry.async_on_unload(
-        async_track_time_interval(
-            hass, ctl.async_step, timedelta(seconds=POLL_SECONDS)
-        )
+        async_track_time_interval(hass, ctl.async_step, timedelta(seconds=POLL_SECONDS))
     )
     entry.async_on_unload(entry.add_update_listener(_reload))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

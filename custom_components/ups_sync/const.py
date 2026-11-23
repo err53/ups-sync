@@ -19,7 +19,14 @@ OPT_NOTIFY = "notify_services"
 OPT_GRID = "grid_entities"
 # Option name -> Params field. Seconds, except c_restore (% battery charge).
 OPT_TIMINGS = (
-    "t_ob", "t_grid", "t_grace", "t_dead", "t_wake", "t_hold", "t_wait", "c_restore",
+    "t_ob",
+    "t_grid",
+    "t_grace",
+    "t_dead",
+    "t_wake",
+    "t_hold",
+    "t_wait",
+    "c_restore",
 )
 # Lowest value the options form accepts. Default 10 s.
 # c_restore: c_restore % of a full battery must be at least 26 minutes with

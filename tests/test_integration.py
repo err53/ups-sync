@@ -11,13 +11,31 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.ups_sync.const import DOMAIN
 from custom_components.ups_sync.snmp import UpsError, UpsReading, parse_reading
 
-UPS = {"host": "10.0.0.4", "read_community": "public", "write_community": "private", "group": 2}
+UPS = {
+    "host": "10.0.0.4",
+    "read_community": "public",
+    "write_community": "private",
+    "group": 2,
+}
 SERVERS = [
-    {"name": "f", "host": "10.0.0.13", "reach_port": 443, "idrac_host": "10.0.0.12",
-     "idrac_user": "u", "idrac_password": "p"},
-    {"name": "s", "host": "10.0.0.11", "reach_port": 8006, "pve_node": "s",
-     "pve_token": "u@pve!t=x", "idrac_host": "10.0.0.10", "idrac_user": "u",
-     "idrac_password": "p"},
+    {
+        "name": "f",
+        "host": "10.0.0.13",
+        "reach_port": 443,
+        "idrac_host": "10.0.0.12",
+        "idrac_user": "u",
+        "idrac_password": "p",
+    },
+    {
+        "name": "s",
+        "host": "10.0.0.11",
+        "reach_port": 8006,
+        "pve_node": "s",
+        "pve_token": "u@pve!t=x",
+        "idrac_host": "10.0.0.10",
+        "idrac_user": "u",
+        "idrac_password": "p",
+    },
 ]
 
 
@@ -113,12 +131,16 @@ async def setup(hass, rig, options=None):
 
 
 async def test_config_flow_creates_entry(hass, rig):
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], UPS)
     assert result["step_id"] == "server"
     # The form says which UPS and group it means, by number and by name.
     assert result["description_placeholders"] == {
-        "host": "10.0.0.4", "group": '2 "Servers"', "added": "none yet"
+        "host": "10.0.0.4",
+        "group": '2 "Servers"',
+        "added": "none yet",
     }
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SERVERS[0], "add_another": True}
@@ -138,13 +160,22 @@ async def test_config_flow_creates_entry(hass, rig):
 
 async def test_config_flow_numbers_are_typed_boxes_and_stored_as_integers(hass, rig):
     """A bare range renders as a slider that shows no value."""
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
     box = result["data_schema"].schema["group"]
-    assert box.config["mode"] == "box" and (box.config["min"], box.config["max"]) == (1, 16)
+    assert box.config["mode"] == "box" and (box.config["min"], box.config["max"]) == (
+        1,
+        16,
+    )
     for bad in (2.5, 0, 17):  # 2.5 must not quietly become group 2
         with pytest.raises(InvalidData):
-            await hass.config_entries.flow.async_configure(result["flow_id"], {**UPS, "group": bad})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {**UPS, "group": 3.0})
+            await hass.config_entries.flow.async_configure(
+                result["flow_id"], {**UPS, "group": bad}
+            )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**UPS, "group": 3.0}
+    )
     assert result["data_schema"].schema["reach_port"].config["mode"] == "box"
     with pytest.raises(InvalidData):
         await hass.config_entries.flow.async_configure(
@@ -160,13 +191,16 @@ async def test_config_flow_numbers_are_typed_boxes_and_stored_as_integers(hass, 
 
 async def test_config_flow_errors(hass, rig):
     rig.read_error = "timeout"
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], UPS)
     assert result["errors"] == {"base": "cannot_connect"}
     rig.read_error = None
     result = await hass.config_entries.flow.async_configure(result["flow_id"], UPS)
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"name": "x", "host": "h", "reach_port": 22, "add_another": False}
+        result["flow_id"],
+        {"name": "x", "host": "h", "reach_port": 22, "add_another": False},
     )
     assert result["errors"] == {"base": "no_channel"}
     rig.chassis["10.0.0.12"] = None
@@ -188,7 +222,9 @@ async def test_dry_run_reports_but_never_acts(hass, rig):
 
 async def test_armed_full_cycle(hass, rig):
     ctl = await setup(hass, rig, {"load_idle_max": 210})
-    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.ups_sync_armed"}, blocking=True)
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": "switch.ups_sync_armed"}, blocking=True
+    )
     assert ctl.armed
 
     rig.set(input_present=False, on_battery=True)
@@ -287,13 +323,18 @@ async def test_set_up_with_the_group_off_restores_by_charge(hass, rig):
     await rig.run(ctl, 15)
     assert rig.calls[0] == ("group", True)
 
+
 async def test_grid_entities_trigger_shutdown_and_hold_back_restore(hass, rig):
     """The UPS stays online the whole time: an upstream battery is feeding it."""
     hass.states.async_set("sensor.wall_voltage", "241.5")
     hass.states.async_set("binary_sensor.grid_relay", "on")
     ctl = await setup(
-        hass, rig,
-        {"load_idle_max": 210, "grid_entities": ["sensor.wall_voltage", "binary_sensor.grid_relay"]},
+        hass,
+        rig,
+        {
+            "load_idle_max": 210,
+            "grid_entities": ["sensor.wall_voltage", "binary_sensor.grid_relay"],
+        },
     )
     await ctl.async_set_flag("armed", True)
     assert not ctl.obs.grid_down
@@ -327,8 +368,16 @@ async def test_grid_entities_trigger_shutdown_and_hold_back_restore(hass, rig):
 
 @pytest.mark.parametrize(
     ("state", "shows_grid"),
-    [("241.5", True), ("0", False), ("0.0", False), ("on", True), ("home", True),
-     ("off", False), ("unavailable", False), ("unknown", False)],
+    [
+        ("241.5", True),
+        ("0", False),
+        ("0.0", False),
+        ("on", True),
+        ("home", True),
+        ("off", False),
+        ("unavailable", False),
+        ("unknown", False),
+    ],
 )
 async def test_what_counts_as_the_grid_being_up(hass, rig, state, shows_grid):
     hass.states.async_set("sensor.g", state)
@@ -341,7 +390,9 @@ async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, r
     """Not loaded yet, renamed or deleted: no evidence, but worth a warning."""
     hass.states.async_set("sensor.real", "unavailable")
     ctl = await setup(
-        hass, rig, {"load_idle_max": 210, "grid_entities": ["sensor.typo", "sensor.late"]}
+        hass,
+        rig,
+        {"load_idle_max": 210, "grid_entities": ["sensor.typo", "sensor.late"]},
     )
     await ctl.async_set_flag("armed", True)
     await rig.run(ctl, 900)
@@ -368,7 +419,9 @@ async def test_an_entity_home_assistant_does_not_know_is_not_a_grid_loss(hass, r
     assert ctl.obs.grid_down and rig.calls == [("shutdown", "f"), ("shutdown", "s")]
 
 
-async def test_ha_restart_during_an_outage_does_not_restore_on_the_home_battery(hass, rig):
+async def test_ha_restart_during_an_outage_does_not_restore_on_the_home_battery(
+    hass, rig
+):
     """After the grid shutdown, HA restarts. The charger has no power, so its
     integration cannot load and its entity is only a restored placeholder."""
     hass.states.async_set("sensor.g", "unavailable", {"restored": True})
@@ -466,9 +519,19 @@ async def test_options_form_offers_grid_entities(hass, rig):
     hass.states.async_set("sensor.wall_voltage", "241")
     result = await hass.config_entries.options.async_configure(
         form["flow_id"],
-        {"load_idle_max": 210, "notify_services": "", "grid_entities": ["sensor.wall_voltage"],
-         "t_ob": 120, "t_grid": 300, "t_grace": 120, "t_dead": 600, "t_wake": 600,
-         "t_hold": 360, "t_wait": 1440, "c_restore": 80},
+        {
+            "load_idle_max": 210,
+            "notify_services": "",
+            "grid_entities": ["sensor.wall_voltage"],
+            "t_ob": 120,
+            "t_grid": 300,
+            "t_grace": 120,
+            "t_dead": 600,
+            "t_wake": 600,
+            "t_hold": 360,
+            "t_wait": 1440,
+            "c_restore": 80,
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
@@ -501,7 +564,9 @@ async def _next(it):
 
 async def test_uncalibrated_and_stale_raise_problem(hass, rig):
     ctl = await setup(hass, rig)
-    assert hass.states.get("binary_sensor.ups_sync_problem").state == "on"  # uncalibrated
+    assert (
+        hass.states.get("binary_sensor.ups_sync_problem").state == "on"
+    )  # uncalibrated
     ctl.params = type(ctl.params)(load_idle_max=210)
     await ctl.async_step()
     assert not ctl.problem

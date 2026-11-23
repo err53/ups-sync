@@ -277,7 +277,9 @@ class Controller:
             st.ctl = IDLE if obs.group_on else CUT
             st.acked.clear()
             st.last_cmd.clear()
-            acts = decide(copy.deepcopy(st), obs, mono, wall, self.params, self.maintenance)
+            acts = decide(
+                copy.deepcopy(st), obs, mono, wall, self.params, self.maintenance
+            )
             would = [self._describe(a) for a in acts]
             if would and would != self.would_act:
                 _LOGGER.info("Dry run, would do: %s", would)

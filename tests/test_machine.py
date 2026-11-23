@@ -123,6 +123,7 @@ def test_cut_after_ack_and_grace_then_reconcile_to_cut():
     step(st, obs(battery=True, load=150, group=False, f=OFF, s=OFF), t + 150)
     assert st.ctl == CUT
 
+
 def test_group_back_on_after_an_unseen_cut_does_not_shut_servers_down_again():
     """The card acknowledged the cut, then the UPS was unreadable while the
     group came back on. The servers are booting on good power: leave them."""
@@ -155,6 +156,7 @@ def test_unknown_idrac_falls_back_to_load_guard():
     jump(st, dark, t + 15)
     assert kinds(step(st, dark, t + 135)) == [("cut", None)]
 
+
 def test_unacked_servers_need_t_dead():
     st = State()
     step(st, obs(battery=True, f=OFF, s=OFF, load=170), 0)
@@ -182,6 +184,7 @@ def test_input_return_does_not_abort_an_acked_shutdown():
     assert kinds(step(st, obs(), t + 800)) == [("shutdown", "f"), ("shutdown", "s")]
     assert st.ctl == SHUTDOWN
 
+
 def test_abort_when_no_command_was_accepted_and_power_is_back():
     st = State()
     step(st, obs(battery=True), 0)
@@ -191,6 +194,7 @@ def test_abort_when_no_command_was_accepted_and_power_is_back():
     assert ("abort", None) in kinds(step(st, obs(), 495))
     assert st.ctl == IDLE
 
+
 def test_abort_after_alarm_when_power_is_back():
     st = State()
     t = shut_down(st)
@@ -198,6 +202,7 @@ def test_abort_after_alarm_when_power_is_back():
     assert st.ctl == SHUTDOWN
     assert ("abort", None) in kinds(step(st, obs(), t + 1900))
     assert st.ctl == IDLE
+
 
 def test_reconcile_after_restart():
     """Design change 1: a fresh controller trusts the group, not a flag."""
@@ -250,6 +255,7 @@ def test_restore_waits_t_hold_after_the_cut_even_if_input_was_stable_for_days():
     assert jump(st, off, 100015) == [] and st.ctl == CUT
     assert step(st, off, 100374) == []
     assert kinds(step(st, off, 100375)) == [("restore", None)]
+
 
 def test_recover_cuts_dead_outlets_without_needing_input():
     """Design changes 2 and 6."""
@@ -420,7 +426,9 @@ def test_a_silent_grid_sensor_neither_shuts_down_nor_restores():
     st = State(ctl=CUT)
     off = dict(group=False, f=OFF, s=OFF, load=150)
     assert step(st, obs(grid=None, **off), 0) == []
-    assert step(st, obs(grid=None, **off), 3600) == []  # input present, grid unconfirmed
+    assert (
+        step(st, obs(grid=None, **off), 3600) == []
+    )  # input present, grid unconfirmed
     assert not stuck(st, obs(grid=None, **off), 3600, 0, P)
     step(st, obs(grid=None, **off), 6 * 3600)
     assert stuck(st, obs(grid=None, **off), 6 * 3600, 0, P)
@@ -437,7 +445,10 @@ def test_grid_timer_does_not_count_unwatched_time():
     jump(st, obs(grid=False), 0)
     assert jump(st, obs(grid=False), 400) == []  # nobody watched in between
     assert step(st, obs(grid=False), 699) == []
-    assert kinds(step(st, obs(grid=False), 700)) == [("shutdown", "f"), ("shutdown", "s")]
+    assert kinds(step(st, obs(grid=False), 700)) == [
+        ("shutdown", "f"),
+        ("shutdown", "s"),
+    ]
 
 
 def test_grid_blip_or_flapping_sensor_does_not_shut_down():
