@@ -42,6 +42,9 @@ def _strip_text(cmd: str) -> str:
                 j += 2 if c == '"' and cmd[j] == "\\" else 1
             out.append("''")
             i = j + 1
+        elif cmd.startswith("\\\n", i):  # line continuation: same command line
+            out.append(" ")
+            i += 2
         elif cmd.startswith("<<<", i):  # here-string, not a heredoc
             out.append("<<<")
             i += 3

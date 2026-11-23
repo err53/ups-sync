@@ -35,6 +35,7 @@ FLAG = "--no-" + "verify"  # split so this file's own text never trips the hook
         f"cat <<EOF; git commit {FLAG} -m fix\nbody\nEOF",
         f'git commit -m "Mention <<EOF" {FLAG}\ncat <<EOF\nbody\nEOF',
         f"cat <<EOF\nEOF more\nEOF\ngit commit {FLAG}",
+        f"git commit -F - <<EOF \\\n  {FLAG}\nmessage\nEOF",
         # Ambiguous, so blocked: the guard does not parse the shell.
         f"echo git commit {FLAG}",
     ],
