@@ -178,9 +178,16 @@ down and are part of what was verified:
 ## Development
 
 ```
-uv venv --python 3.14 && uv pip install -r requirements-test.txt
+uv venv --python 3.14
+uv pip install -r requirements-test.txt -r requirements-lint.txt
+git config core.hooksPath .githooks   # run the checks before each commit
 .venv/bin/python -m pytest
+scripts/check.sh                      # ruff, ruff format, pyright; --fix to apply fixes
 ```
+
+CI runs the same `scripts/check.sh`. Pyright checks the integration only; the
+tests use duck-typed fakes on purpose. `.claude/settings.json` stops coding
+agents from skipping the commit hook with `--no-verify`.
 
 `tests/test_sim.py` drives the real controller logic through thousands of
 random outages and fails if a server ever loses power while running.

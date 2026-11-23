@@ -52,7 +52,7 @@ RUN_MIN_W, RUN_MAX_W, SHUT_W, BOOT_W = 80, 160, 150, 280
 FULL_W = BASE_W + 2 * RUN_MAX_W
 NOISE_W = 15
 P = Params(load_idle_max=BASE_W + 2 * STANDBY_W + 40)
-assert BASE_W + STANDBY_W + RUN_MIN_W - NOISE_W > P.load_idle_max  # guard can tell
+assert P.load_idle_max < BASE_W + STANDBY_W + RUN_MIN_W - NOISE_W  # guard can tell
 NAMES = ("f", "s")
 
 

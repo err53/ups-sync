@@ -148,7 +148,7 @@ class ApcClient:
             if isinstance(value, (NoSuchObject, NoSuchInstance, EndOfMibView)):
                 return ""
             return value.prettyPrint().strip()
-        except Exception:  # the name is a courtesy; never fail setup over it
+        except Exception:  # noqa: BLE001  the name is a courtesy; never fail setup over it
             return ""
 
     async def set_group(self, on: bool) -> None:

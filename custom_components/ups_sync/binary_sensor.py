@@ -17,12 +17,14 @@ POWER = BinarySensorDeviceClass.POWER
 
 
 def _obs(field: str) -> Callable[[Controller], bool | None]:
-    return lambda ctl: getattr(ctl.obs, field)
+    return lambda ctl: None if ctl.obs is None else getattr(ctl.obs, field)
 
 
 def _grid(ctl: Controller) -> bool | None:
     """On: a grid entity shows the grid up. Off: they all show it down.
     Unknown: none of them is saying anything."""
+    if ctl.obs is None:
+        return None
     if ctl.obs.grid_ok:
         return True
     return False if ctl.obs.grid_down else None

@@ -39,7 +39,7 @@ class Server:
             )
         except ConnectionRefusedError:
             return True  # a refusal comes from a running kernel
-        except (OSError, asyncio.TimeoutError):
+        except (TimeoutError, OSError):
             return False
         writer.close()
         return True
@@ -60,7 +60,7 @@ class Server:
                 if resp.status >= 300:
                     raise ServerError(f"iDRAC HTTP {resp.status}")
                 return await resp.json(content_type=None) if method == "GET" else {}
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+        except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
             raise ServerError(f"iDRAC: {exc!r}") from exc
 
     async def chassis_on(self) -> bool | None:
@@ -92,7 +92,7 @@ class Server:
             ) as resp:
                 if resp.status >= 300:
                     raise ServerError(f"Proxmox HTTP {resp.status}")
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, aiohttp.ClientError) as exc:
             raise ServerError(f"Proxmox: {exc!r}") from exc
 
     async def shutdown(self) -> str:

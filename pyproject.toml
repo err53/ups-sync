@@ -5,3 +5,42 @@
 target-version = "py313"
 line-length = 88
 extend-exclude = ["formal/states"]
+
+[tool.ruff.lint]
+# Listed explicitly so a ruff upgrade cannot change what is checked.
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # import order
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "BLE",          # blind except
+    "ASYNC",        # asyncio pitfalls
+    "SIM",          # simplify
+    "C4",           # comprehensions
+    "PT",           # pytest style
+    "RUF",          # ruff's own
+]
+ignore = [
+    "E501",   # the formatter owns line length; long comments and strings are fine
+    "PT018",     # composite asserts read fine in these tests
+    "C408",      # dict(a=1) reads fine
+    "SIM102",    # nested ifs in the simulator mirror the prose they model
+    "ASYNC109",  # the timeout parameters here are pysnmp settings, not awaits
+    "RUF012",    # Home Assistant's _attr_* class attributes are the pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Live hardware checks are run by hand, not by pytest.
+"scripts/*" = ["PT"]
+
+[tool.pyright]
+# Tests use duck-typed fakes on purpose; only the integration is checked.
+include = ["custom_components"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+# Home Assistant declares entity properties as cached_property; overriding
+# them with a plain @property is the documented pattern, but pyright flags it.
+reportIncompatibleVariableOverride = false
+# Home Assistant re-exports names like BinarySensorDeviceClass from each
+# platform package; that is its public API, even without __all__.
+reportPrivateImportUsage = false
