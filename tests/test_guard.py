@@ -25,6 +25,10 @@ FLAG = "--no-" + "verify"  # split so this file's own text never trips the hook
         "git commit -anm x",
         f"cd repo && git commit {FLAG}",
         f"git add -A; git commit {FLAG} -m x",
+        f"git status\ngit commit {FLAG}",
+        f'git commit -m ";" {FLAG}',
+        f"git commit -m -- {FLAG}",
+        f"GIT_AUTHOR_NAME=x git commit {FLAG}",
     ],
 )
 def test_blocks_skipping_hooks(command):
@@ -42,6 +46,8 @@ def test_blocks_skipping_hooks(command):
         f'echo "never use {FLAG}" > notes.txt',
         f"ls; echo {FLAG}",
         f"git log --grep {FLAG}",
+        f"echo git commit {FLAG}",
+        f"git commit -m 'a; git commit {FLAG}'",
         'git commit -m "unbalanced',
     ],
 )

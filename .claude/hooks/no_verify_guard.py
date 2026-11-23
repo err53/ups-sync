@@ -13,7 +13,10 @@ SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
 
 
 def skips_hooks(command: str) -> bool:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
+    # Non-POSIX mode keeps quotes on tokens, so a quoted ";" is not a
+    # separator; newlines are separators, not whitespace.
+    lexer = shlex.shlex(command, posix=False, punctuation_chars=";&|()\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
         tokens = list(lexer)
@@ -22,7 +25,7 @@ def skips_hooks(command: str) -> bool:
     segment: list[str] = []
     for token in [*tokens, ";"]:
         if token not in SEPARATORS:
-            segment.append(token)
+            segment.append(_unquote(token))
             continue
         if _segment_skips(segment):
             return True
@@ -30,10 +33,19 @@ def skips_hooks(command: str) -> bool:
     return False
 
 
+def _unquote(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        return token[1:-1]
+    return token
+
+
 def _segment_skips(args: list[str]) -> bool:
-    if "git" not in args:
+    # git must be the command itself, after any VAR=value assignments.
+    while args and "=" in args[0] and not args[0].startswith("-"):
+        args = args[1:]
+    if not args or args[0] != "git":
         return False
-    args = args[args.index("git") + 1 :]
+    args = args[1:]
     # Skip global options such as -C <dir> or -c key=value.
     while args and args[0].startswith("-"):
         args = args[2:] if args[0] in ("-C", "-c") else args[1:]
@@ -41,10 +53,10 @@ def _segment_skips(args: list[str]) -> bool:
         return False
     sub, rest = args[0], args[1:]
     for i, arg in enumerate(rest):
-        if arg == "--":
-            break
         if i and rest[i - 1] in ("-m", "-F", "-C", "-c", "--message", "--file"):
             continue  # this is a value, such as the commit message
+        if arg == "--":
+            break
         if arg == "--no-verify":
             return True
         # `git commit -n` is the short form; for push, -n means --dry-run.
